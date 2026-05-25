@@ -1,4 +1,8 @@
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(PROJECT_ROOT))
 
 import mlflow
 import mlflow.sklearn
@@ -18,6 +22,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+from src.quality_gate import evaluate_quality_gate
 
 
 PROCESSED_DATA_PATH = Path("data/processed/ai4i2020_processed.csv")
@@ -229,23 +235,32 @@ def main() -> None:
         ]
     )
 
-    quality_gate = {
-        "min_recall": 0.80,
-        "min_f1": 0.60,
-        "min_roc_auc": 0.85,
-    }
+    quality_gate_results = []
 
-    passed_candidates = results_df[
-        (results_df["recall"] >= quality_gate["min_recall"])
-        & (results_df["f1"] >= quality_gate["min_f1"])
-        & (results_df["roc_auc"] >= quality_gate["min_roc_auc"])
-    ].copy()
+    for _, row in results_df.iterrows():
+        gate_result = evaluate_quality_gate(row.to_dict())
+        quality_gate_results.append(gate_result.passed)
 
-    print("=" * 80)
-    print("Quality gate:")
-    print(quality_gate)
+        print("=" * 80)
+        print(f"Quality gate result for {row['model_name']}:")
+        print(f"passed: {gate_result.passed}")
+
+        if gate_result.passed_checks:
+            print("passed checks:")
+            for check in gate_result.passed_checks:
+                print(f"  - {check}")
+
+        if gate_result.failed_checks:
+            print("failed checks:")
+            for check in gate_result.failed_checks:
+                print(f"  - {check}")
+
+    results_df["quality_gate_passed"] = quality_gate_results
+
+    passed_candidates = results_df[results_df["quality_gate_passed"]].copy()
 
     if passed_candidates.empty:
+        print("=" * 80)
         print("No candidate passed the quality gate.")
         best_model = results_df.sort_values(
             by=["recall", "f1", "roc_auc"],
@@ -253,13 +268,26 @@ def main() -> None:
         ).iloc[0]
         print("Best rejected candidate:")
     else:
+        print("=" * 80)
         best_model = passed_candidates.sort_values(
             by=["recall", "f1", "roc_auc"],
             ascending=False,
         ).iloc[0]
         print("Best candidate that passed the quality gate:")
 
-    print(best_model[["model_name", "recall", "precision", "f1", "roc_auc", "run_id"]])
+    print(
+        best_model[
+            [
+                "model_name",
+                "recall",
+                "precision",
+                "f1",
+                "roc_auc",
+                "quality_gate_passed",
+                "run_id",
+            ]
+        ]
+    )
 
 
 if __name__ == "__main__":

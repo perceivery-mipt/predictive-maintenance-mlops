@@ -520,3 +520,165 @@ tests/            Unit- и API-тесты
 data/             Локальные данные для разработки
 models/           Локальные артефакты моделей
 ```
+
+## Дополнение: Infrastructure as Code
+
+Формальный слой Infrastructure as Code реализуется через Ansible и Docker Compose.
+
+Docker Compose описывает состав микросервисов и их связи: PostgreSQL, Redis, MLflow, FastAPI, Airflow, Prometheus, Node Exporter и Grafana.
+
+Ansible отвечает за подготовку виртуальной машины и воспроизводимое развёртывание проекта: установку системных пакетов, установку Docker, копирование проекта, сборку образов, запуск инфраструктуры и проверку health endpoints.
+
+Ожидаемая структура IaC-модуля:
+
+```text
+ansible/
+  inventory.ini
+  group_vars/
+    all.yml
+  playbook.yml
+  README.md
+```
+
+Запуск развёртывания на VM:
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
+```
+
+Проект допускает развёртывание всех микросервисов на одной виртуальной машине. Ресурсы VM могут быть обоснованы суммарным потреблением контейнеров по команде:
+
+```bash
+docker stats --no-stream
+```
+
+## Дополнение: инфраструктурный мониторинг через Node Exporter
+
+Для мониторинга инфраструктуры используется Prometheus Node Exporter.
+
+Node Exporter поднимается отдельным контейнером:
+
+```text
+predictive-maintenance-node-exporter
+```
+
+Prometheus собирает с него системные метрики через scrape target:
+
+```text
+node-exporter:9100/metrics
+```
+
+Проверка Node Exporter:
+
+```bash
+curl http://127.0.0.1:9100/metrics | head
+```
+
+Проверка метрик Node Exporter через Prometheus:
+
+```bash
+curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
+```
+
+Ожидаемый результат: Prometheus возвращает `status: success`, а поле `result` содержит значения метрики `node_cpu_seconds_total`.
+
+## Дополнение: контроль drift данных
+
+Для контроля деградации входных данных может использоваться Evidently AI или Deepchecks. В этом проекте рекомендуется использовать Evidently AI как более лёгкий инструмент для проверки drift без ручной настройки внешнего DQOps.
+
+Целевая логика drift-контроля:
+
+1. Reference dataset берётся из исторической части подготовленного датасета.
+2. Current dataset берётся из более поздней части подготовленного датасета.
+3. Evidently строит отчёт о drift по входным признакам.
+4. Отчёт сохраняется в каталог `reports/`.
+5. Airflow может запускать drift-check как отдельную task перед обучением или перед promotion модели.
+
+Ожидаемая структура:
+
+```text
+reports/
+  data_drift_report.html
+  data_drift_report.json
+
+pipelines/
+  check_data_drift.py
+
+docs/
+  data_drift.md
+```
+
+Пример команды запуска:
+
+```bash
+python pipelines/check_data_drift.py
+```
+
+Проверочный результат:
+
+```text
+Data drift report was created.
+HTML report: reports/data_drift_report.html
+JSON report: reports/data_drift_report.json
+```
+
+## Дополнение: команды для демонстрации на защите
+
+Проверить, что репозиторий чистый:
+
+```bash
+git status
+```
+
+Проверить тесты:
+
+```bash
+python -m pytest -q
+```
+
+Проверить контейнеры:
+
+```bash
+docker compose -f infra/docker-compose.yml ps
+```
+
+Проверить успешный DAG run:
+
+```bash
+docker compose -f infra/docker-compose.yml exec airflow-scheduler \
+  airflow dags list-runs -d predictive_maintenance_training_pipeline
+```
+
+Проверить API-метрики:
+
+```bash
+curl "http://127.0.0.1:9090/api/v1/query?query=predict_requests_total"
+```
+
+Проверить инфраструктурные метрики:
+
+```bash
+curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
+```
+
+Проверить Grafana:
+
+```bash
+curl http://127.0.0.1:3000/api/health
+```
+
+Проверить Airflow:
+
+```bash
+curl http://127.0.0.1:8081/health
+```
+
+## Дополнение: рекомендуемые скриншоты для отчёта
+
+1. `docker compose ps` со всеми сервисами.
+2. Airflow UI с успешным DAG run.
+3. MLflow UI с экспериментами и registered model.
+4. FastAPI `/docs` или успешный `/predict`.
+5. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
+6. Grafana dashboard `Predictive Maintenance API`.
+7. Git log с последовательными коммитами по компонентам.

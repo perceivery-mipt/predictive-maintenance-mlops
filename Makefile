@@ -1,10 +1,12 @@
 PYTHON := python
 
 COMPOSE := docker compose -f infra/docker-compose.yml
+CANARY_COMPOSE := docker compose -f infra/docker-compose.canary.yml
+
 MLFLOW_URI := http://127.0.0.1:5050
 FEAST_REDIS_CONNECTION_STRING := localhost:16379
 
-.PHONY: install test download-data prepare-data build-feast-dataset feast-apply feast-check train train-mlflow promote docker-up docker-up-core docker-up-api airflow-init airflow-up airflow-trigger airflow-logs docker-down docker-ps api-local drift-check
+.PHONY: install test download-data prepare-data build-feast-dataset feast-apply feast-check train train-mlflow promote docker-up docker-up-core docker-up-api docker-down docker-ps api-local airflow-init airflow-up airflow-trigger airflow-logs drift-check canary-up canary-down canary-ps canary-check canary-90-10 canary-50-50 canary-100 canary-rollback
 
 install:
 	$(PYTHON) -m pip install --upgrade pip setuptools wheel
@@ -38,7 +40,7 @@ promote:
 	MLFLOW_TRACKING_URI=$(MLFLOW_URI) $(PYTHON) pipelines/promote_model.py
 
 docker-up-core:
-	$(COMPOSE) up -d postgres mlflow
+	$(COMPOSE) up -d postgres redis mlflow
 
 docker-up-api:
 	$(COMPOSE) up -d api
@@ -72,3 +74,28 @@ airflow-logs:
 
 drift-check:
 	$(PYTHON) pipelines/check_data_drift.py
+
+
+canary-up:
+	$(CANARY_COMPOSE) up -d --build
+
+canary-down:
+	$(CANARY_COMPOSE) down
+
+canary-ps:
+	$(CANARY_COMPOSE) ps
+
+canary-check:
+	N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+
+canary-90-10:
+	scripts/switch_canary_90_10.sh
+
+canary-50-50:
+	scripts/switch_canary_50_50.sh
+
+canary-100:
+	scripts/switch_canary_100.sh
+
+canary-rollback:
+	scripts/rollback_canary_to_stable.sh

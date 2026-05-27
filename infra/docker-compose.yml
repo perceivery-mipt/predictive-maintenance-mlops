@@ -74,8 +74,12 @@ services:
       MODEL_NAME: predictive-maintenance-model
       MODEL_ALIAS: champion
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      FEAST_REPO_PATH: /app/feature_repo
+      FEAST_REDIS_CONNECTION_STRING: redis:6379
     ports:
       - "8000:8000"
+    volumes:
+      - ../feature_repo:/app/feature_repo:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -188,6 +192,22 @@ services:
         condition: service_healthy
       node-exporter:
         condition: service_healthy
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
 
   grafana:
     image: grafana/grafana:11.3.1

@@ -1,0 +1,62 @@
+groups:
+  - name: predictive-maintenance-api-slo
+    rules:
+      - alert: PredictiveMaintenanceHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(predict_latency_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 1m
+        labels:
+          severity: warning
+          service: predictive-maintenance-api
+          slo: api-low-latency
+        annotations:
+          summary: "High p95 latency for predictive maintenance API"
+          description: "p95 prediction latency is above 1 second for more than 1 minute."
+
+      - alert: PredictiveMaintenanceHighErrorRate
+        expr: |
+          (
+            sum(rate(predict_errors_total[5m]))
+            /
+            clamp_min(sum(rate(predict_requests_total[5m])), 1)
+          ) > 0.01
+        for: 1m
+        labels:
+          severity: critical
+          service: predictive-maintenance-api
+          slo: api-low-error-rate
+        annotations:
+          summary: "High error rate for predictive maintenance API"
+          description: "Prediction error rate is above 1% for more than 1 minute."
+
+      - alert: PredictiveMaintenanceApiDown
+        expr: |
+          up{job="predictive-maintenance-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: predictive-maintenance-api
+          slo: api-availability
+        annotations:
+          summary: "Predictive maintenance API is down"
+          description: "Prometheus cannot scrape the FastAPI metrics endpoint."
+
+
+      - alert: PredictiveMaintenanceFeatureRetrievalErrors
+        expr: |
+          (
+            sum(rate(feature_retrieval_errors_total[5m]))
+            /
+            clamp_min(sum(rate(feature_retrieval_requests_total[5m])), 1)
+          ) > 0.01
+        for: 1m
+        labels:
+          severity: warning
+          service: predictive-maintenance-api
+          slo: feature-retrieval-success
+        annotations:
+          summary: "High online feature retrieval error rate"
+          description: "Feature retrieval error rate from Feast Redis is above 1% for more than 1 minute."

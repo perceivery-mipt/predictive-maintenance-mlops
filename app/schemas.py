@@ -12,6 +12,11 @@ class PredictionRequest(BaseModel):
     machine_type_M: int = Field(..., ge=0, le=1, description="Medium-quality machine type flag")
 
 
+
+class FeatureStorePredictionRequest(BaseModel):
+    machine_id: int = Field(..., ge=1, description="Industrial machine identifier")
+
+
 class PredictionResponse(BaseModel):
     failure_probability: float
     prediction: int

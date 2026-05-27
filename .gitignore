@@ -21,3 +21,6 @@ feature_repo/data/
 # Generated Evidently reports
 reports/evidently/*.html
 reports/evidently/*.json
+
+# Local MLflow file store
+mlruns/

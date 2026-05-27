@@ -1,0 +1,131 @@
+---
+- name: Deploy predictive maintenance MLOps infrastructure
+  hosts: mlops
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Install base system packages
+      ansible.builtin.apt:
+        name: "{{ required_packages }}"
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Install Docker using official convenience script if docker is absent
+      ansible.builtin.shell: |
+        set -e
+        if ! command -v docker >/dev/null 2>&1; then
+          curl -fsSL https://get.docker.com | sh
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure Docker service is enabled and started
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add deployment user to docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Create remote project directory
+      ansible.builtin.file:
+        path: "{{ remote_project_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Synchronize project files to VM
+      ansible.posix.synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ remote_project_dir }}/"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.venv"
+          - "--exclude=mlruns"
+          - "--exclude=data/raw/*.csv"
+          - "--exclude=data/processed/*.csv"
+          - "--exclude=data/processed/*.parquet"
+          - "--exclude=models/*.joblib"
+          - "--exclude=models/*.json"
+          - "--exclude=__pycache__"
+          - "--exclude=.DS_Store"
+      become: false
+
+    - name: Build Docker images
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ compose_file }}" build
+        chdir: "{{ remote_project_dir }}"
+      changed_when: true
+
+    - name: Start core infrastructure
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ compose_file }}" up -d postgres redis mlflow
+        chdir: "{{ remote_project_dir }}"
+      changed_when: true
+
+    - name: Wait for MLflow to become available
+      ansible.builtin.uri:
+        url: http://127.0.0.1:5050
+        method: GET
+        status_code: 200
+      register: mlflow_health
+      retries: 30
+      delay: 5
+      until: mlflow_health.status == 200
+
+    - name: Run training pipeline and promote champion model
+      ansible.builtin.shell: |
+        set -e
+        python3 -m venv .venv
+        . .venv/bin/activate
+        python -m ensurepip --upgrade
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install -r requirements.txt
+        python pipelines/download_data.py
+        python pipelines/prepare_data.py
+        python pipelines/build_feature_store_dataset.py
+        FEAST_REDIS_CONNECTION_STRING=localhost:16379 bash -c 'cd feature_repo && feast apply'
+        FEAST_REDIS_CONNECTION_STRING=localhost:16379 python pipelines/check_feature_store.py
+        MLFLOW_TRACKING_URI=http://127.0.0.1:5050 python pipelines/train_mlflow.py
+        MLFLOW_TRACKING_URI=http://127.0.0.1:5050 python pipelines/promote_model.py
+      args:
+        chdir: "{{ remote_project_dir }}"
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Start full MLOps infrastructure
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ compose_file }}" up -d
+        chdir: "{{ remote_project_dir }}"
+      changed_when: true
+
+    - name: Wait for service health endpoints
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        method: GET
+        status_code: 200
+      register: service_health
+      retries: 30
+      delay: 5
+      until: service_health.status == 200
+      loop: "{{ healthcheck_urls }}"
+
+    - name: Show running containers
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ compose_file }}" ps
+        chdir: "{{ remote_project_dir }}"
+      register: compose_ps
+      changed_when: false
+
+    - name: Print running containers
+      ansible.builtin.debug:
+        var: compose_ps.stdout_lines

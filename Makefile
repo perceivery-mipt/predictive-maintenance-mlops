@@ -4,7 +4,7 @@ COMPOSE := docker compose -f infra/docker-compose.yml
 MLFLOW_URI := http://127.0.0.1:5050
 FEAST_REDIS_CONNECTION_STRING := localhost:16379
 
-.PHONY: install test download-data prepare-data build-feast-dataset feast-apply feast-check train train-mlflow promote docker-up docker-up-core docker-up-api airflow-init airflow-up airflow-trigger airflow-logs docker-down docker-ps api-local
+.PHONY: install test download-data prepare-data build-feast-dataset feast-apply feast-check train train-mlflow promote docker-up docker-up-core docker-up-api airflow-init airflow-up airflow-trigger airflow-logs docker-down docker-ps api-local drift-check
 
 install:
 	$(PYTHON) -m pip install --upgrade pip setuptools wheel
@@ -68,3 +68,7 @@ airflow-trigger:
 
 airflow-logs:
 	$(COMPOSE) logs --tail=120 airflow-webserver airflow-scheduler
+
+
+drift-check:
+	$(PYTHON) pipelines/check_data_drift.py

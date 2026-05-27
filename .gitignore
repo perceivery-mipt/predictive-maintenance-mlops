@@ -17,3 +17,7 @@ airflow/dags/__pycache__/
 
 # Feast generated registry
 feature_repo/data/
+
+# Generated Evidently reports
+reports/evidently/*.html
+reports/evidently/*.json

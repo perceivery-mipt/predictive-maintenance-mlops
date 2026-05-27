@@ -18,7 +18,8 @@
 - систему управления экспериментами и реестр моделей на базе MLflow;
 - оркестрацию пайплайнов с помощью Airflow;
 - сервинг модели через FastAPI;
-- мониторинг сервиса и модели через Prometheus и Grafana;
+- canary deployment inference service через Nginx weighted upstream;
+- monitoring сервиса и модели через Prometheus и Grafana;
 - infrastructure monitoring через Node Exporter;
 - SLO as Code и Prometheus alert rules для latency, error rate и online feature retrieval;
 - data drift monitoring через Evidently AI;
@@ -37,6 +38,7 @@
 | Оркестратор | Airflow | Автоматизация ML-пайплайна |
 | Управление экспериментами | MLflow | Логирование параметров, метрик и артефактов |
 | Реестр моделей | MLflow Model Registry | Хранение версий моделей и champion/challenger-логика |
+| API traffic switching | Nginx, Docker Compose | Canary rollout 90/10, 50/50, 100% и rollback |
 | Мониторинг | Prometheus, Grafana | Технический и модельный мониторинг |
 | Инфраструктурный мониторинг | Node Exporter | Метрики виртуальной машины и контейнерной инфраструктуры |
 | Drift monitoring | Evidently AI | HTML-отчёт и JSON summary по data drift |
@@ -115,6 +117,12 @@ FastAPI inference service
   - /predict/from-feature-store
   - /metrics
         ↓
+Canary traffic switching
+  - stable API instance
+  - canary API instance
+  - Nginx weighted upstream
+  - rollback to stable
+        ↓
 Monitoring
   - Prometheus
   - Grafana
@@ -135,6 +143,7 @@ PostgreSQL     — MLflow backend store и Airflow metadata database
 MLflow         — Tracking Server и Model Registry
 Redis          — Feast online store
 FastAPI        — online inference API
+Nginx          — canary gateway для распределения traffic между stable и canary
 Airflow        — orchestration DAG
 Prometheus     — сбор метрик API и инфраструктуры
 Node Exporter  — инфраструктурные метрики VM/container host
@@ -175,12 +184,21 @@ dags/
 
 infra/
   docker-compose.yml              инфраструктурный контур
+  docker-compose.canary.yml       canary-контур stable/canary/gateway
   Dockerfile.api                  Dockerfile для FastAPI
   Dockerfile.airflow              Dockerfile для Airflow
   requirements-airflow.txt        отдельные зависимости Airflow
+  nginx/                          Nginx configs для 90/10, 50/50, 100% canary и rollback
   prometheus/prometheus.yml       конфигурация Prometheus
   prometheus/rules/               Prometheus alert rules / SLO rules
   grafana/                        provisioning Grafana datasource/dashboard
+
+scripts/
+  switch_canary_90_10.sh          переключение traffic на 90% stable / 10% canary
+  switch_canary_50_50.sh          переключение traffic на 50% stable / 50% canary
+  switch_canary_100.sh            переключение traffic на 100% canary
+  rollback_canary_to_stable.sh    rollback traffic на 100% stable
+  check_canary_distribution.sh    проверка распределения traffic через /health
 
 ansible/
   inventory.ini                   inventory для VM
@@ -242,6 +260,8 @@ Endpoint `/predict` принимает полный набор признако�
 
 Endpoint `/predict/from-feature-store` принимает только `machine_id`, получает online-признаки из Feast Redis Online Store и выполняет inference champion-моделью из MLflow Model Registry.
 
+Endpoint `/health` дополнительно возвращает `deployment_track` и `model_alias`. Эти поля используются в canary-контуре для проверки, какой backend обработал запрос: `stable` или `canary`.
+
 Пример запроса:
 
 ```bash
@@ -297,6 +317,7 @@ curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
 
 ```text
 FastAPI API       http://127.0.0.1:8000
+Canary Gateway    http://127.0.0.1:8010
 MLflow UI         http://127.0.0.1:5050
 PostgreSQL        localhost:15432
 Redis             localhost:16379
@@ -445,7 +466,119 @@ docker compose -f infra/docker-compose.yml exec airflow-scheduler \
 success
 ```
 
-## 11. Monitoring
+## 11. Canary deployment
+
+Для демонстрации постепенного вывода новой версии inference service в production используется отдельный canary-контур:
+
+```text
+infra/docker-compose.canary.yml
+```
+
+Он поднимает три сервиса:
+
+```text
+stable          — стабильная версия FastAPI inference service
+canary          — новая версия FastAPI inference service
+canary-gateway  — Nginx gateway с weighted upstream
+```
+
+Nginx распределяет traffic между `stable` и `canary` по активному конфигу:
+
+```text
+infra/nginx/nginx.active.conf
+```
+
+Доступные режимы:
+
+```text
+90/10       90% stable, 10% canary
+50/50       50% stable, 50% canary
+100 canary  100% canary
+rollback    100% stable
+```
+
+Запуск canary-контурa:
+
+```bash
+docker compose -f infra/docker-compose.canary.yml up -d --build
+```
+
+Проверка gateway:
+
+```bash
+curl http://127.0.0.1:8010/health
+```
+
+Проверка распределения traffic:
+
+```bash
+N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Фактическая проверка 90/10:
+
+```text
+5  {"status":"ok","model_loaded":true,"deployment_track":"canary","model_alias":"champion"}
+45 {"status":"ok","model_loaded":true,"deployment_track":"stable","model_alias":"champion"}
+```
+
+Переключение на 50/50:
+
+```bash
+scripts/switch_canary_50_50.sh
+N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Фактическая проверка 50/50:
+
+```text
+25 {"status":"ok","model_loaded":true,"deployment_track":"canary","model_alias":"champion"}
+25 {"status":"ok","model_loaded":true,"deployment_track":"stable","model_alias":"champion"}
+```
+
+Переключение на 100% canary:
+
+```bash
+scripts/switch_canary_100.sh
+N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Фактическая проверка 100% canary:
+
+```text
+20 {"status":"ok","model_loaded":true,"deployment_track":"canary","model_alias":"champion"}
+```
+
+Rollback на stable:
+
+```bash
+scripts/rollback_canary_to_stable.sh
+N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Фактическая проверка rollback:
+
+```text
+20 {"status":"ok","model_loaded":true,"deployment_track":"stable","model_alias":"champion"}
+```
+
+Версии модели для stable и canary не захардкожены. Они задаются через переменные окружения:
+
+```text
+STABLE_MODEL_ALIAS
+CANARY_MODEL_ALIAS
+```
+
+По умолчанию обе версии используют `champion`, чтобы canary-контур можно было поднять без отдельного MLflow alias `challenger`. Для реального canary новой модели можно запустить:
+
+```bash
+STABLE_MODEL_ALIAS=champion CANARY_MODEL_ALIAS=challenger \
+  docker compose -f infra/docker-compose.canary.yml up -d --build
+```
+
+Если challenger-модель не проходит quality gate или после переключения нарушаются SLO, traffic возвращается на stable через `rollback_canary_to_stable.sh`.
+
+## 12. Monitoring
 
 FastAPI отдаёт Prometheus-метрики на endpoint:
 
@@ -516,7 +649,7 @@ Grafana dashboard:
 Predictive Maintenance / Predictive Maintenance API
 ```
 
-## 12. CI
+## 13. CI
 
 GitHub Actions workflow:
 
@@ -545,7 +678,7 @@ python -m pytest -q
 make test
 ```
 
-## 13. Проверочные команды для защиты
+## 14. Проверочные команды для защиты
 
 Проверка API:
 
@@ -555,6 +688,26 @@ curl http://127.0.0.1:8000/model/info
 curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
   -H "Content-Type: application/json" \
   -d '{"machine_id": 1}'
+```
+
+Проверка canary gateway:
+
+```bash
+curl http://127.0.0.1:8010/health
+N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Проверка canary switching и rollback:
+
+```bash
+scripts/switch_canary_50_50.sh
+N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+
+scripts/switch_canary_100.sh
+N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+
+scripts/rollback_canary_to_stable.sh
+N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
 ```
 
 Проверка MLflow:
@@ -591,6 +744,7 @@ curl http://127.0.0.1:3000/api/health
 
 ```bash
 docker compose -f infra/docker-compose.yml ps
+docker compose -f infra/docker-compose.canary.yml ps
 ```
 
 Проверка Evidently drift report:
@@ -611,8 +765,9 @@ cat reports/evidently/data_drift_summary.json
 6. Evaluation pipeline сравнивает модель-кандидат с текущей champion-моделью.
 7. Quality gate принимает решение о продвижении или отклонении модели.
 8. FastAPI обслуживает текущую champion-модель через прямой inference endpoint `/predict` и production-like endpoint `/predict/from-feature-store` с online feature retrieval из Feast Redis.
-9. Мониторинг отслеживает технические сбои, latency, error rate, online feature retrieval, деградацию модели и drift данных.
-10. При деградации качества запускается переобучение, и устаревшая модель заменяется новой валидированной моделью.
+9. Canary gateway позволяет постепенно перевести traffic со stable API instance на canary API instance и выполнить rollback при нарушении SLO.
+10. Мониторинг отслеживает технические сбои, latency, error rate, online feature retrieval, деградацию модели и drift данных.
+11. При деградации качества запускается переобучение, и устаревшая модель заменяется новой валидированной моделью.
 
 ## Структура репозитория
 
@@ -622,7 +777,8 @@ dags/             DAG-файлы Airflow
 pipelines/        Скрипты загрузки данных, обучения, оценки, drift monitoring и продвижения модели
 src/              Общие Python-модули проекта
 feature_repo/     Репозиторий Feast Feature Store
-infra/            Docker Compose и конфигурации мониторинга
+infra/            Docker Compose, Nginx canary и конфигурации мониторинга
+scripts/          Скрипты canary switching, rollback и проверок
 ansible/          Infrastructure as Code deployment через Ansible
 sql/              SQL-скрипты инициализации базы данных
 docs/             Манифест, архитектура, SLI/SLO, ADR-документы
@@ -636,7 +792,7 @@ reports/          Генерируемые Evidently-отчёты drift monitori
 
 Формальный слой Infrastructure as Code реализуется через Ansible и Docker Compose.
 
-Docker Compose описывает состав микросервисов и их связи: PostgreSQL, Redis, MLflow, FastAPI, Airflow, Prometheus, Node Exporter и Grafana.
+Docker Compose описывает состав микросервисов и их связи: PostgreSQL, Redis, MLflow, FastAPI, Airflow, Prometheus, Node Exporter, Grafana и canary gateway на базе Nginx.
 
 Ansible отвечает за подготовку виртуальной машины и воспроизводимое развёртывание проекта: установку системных пакетов, установку Docker, копирование проекта, сборку образов, запуск инфраструктуры и проверку health endpoints.
 
@@ -762,6 +918,7 @@ python -m pytest -q
 
 ```bash
 docker compose -f infra/docker-compose.yml ps
+docker compose -f infra/docker-compose.canary.yml ps
 ```
 
 Проверить успешный DAG run:
@@ -810,6 +967,19 @@ curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
   -d '{"machine_id": 1}'
 ```
 
+Проверить canary traffic distribution:
+
+```bash
+N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
+Проверить rollback:
+
+```bash
+scripts/rollback_canary_to_stable.sh
+N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+```
+
 ## Дополнение: рекомендуемые скриншоты для отчёта
 
 1. `docker compose ps` со всеми сервисами.
@@ -817,8 +987,9 @@ curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
 3. MLflow UI с экспериментами и registered model.
 4. FastAPI `/docs` или успешный `/predict`.
 5. FastAPI `/predict/from-feature-store` с online retrieval из Feast Redis.
-6. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
-7. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
-8. Grafana dashboard `Predictive Maintenance API`.
-9. Evidently HTML report `reports/evidently/data_drift_report.html`.
-10. Git log с последовательными коммитами по компонентам.
+6. Canary gateway: распределение 90/10, 50/50, 100% canary и rollback.
+7. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
+8. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
+9. Grafana dashboard `Predictive Maintenance API`.
+10. Evidently HTML report `reports/evidently/data_drift_report.html`.
+11. Git log с последовательными коммитами по компонентам.

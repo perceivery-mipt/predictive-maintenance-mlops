@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 from time import perf_counter
 
 import pandas as pd
@@ -66,6 +67,8 @@ FEATURE_RETRIEVAL_LATENCY = Histogram(
 )
 
 model = None
+
+DEPLOYMENT_TRACK = os.getenv("DEPLOYMENT_TRACK", "single")
 
 
 FEATURE_COLUMNS = [
@@ -160,6 +163,8 @@ def health() -> dict:
     return {
         "status": "ok",
         "model_loaded": model is not None,
+        "deployment_track": DEPLOYMENT_TRACK,
+        "model_alias": MODEL_ALIAS,
     }
 
 

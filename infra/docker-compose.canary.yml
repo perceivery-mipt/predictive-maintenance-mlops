@@ -1,0 +1,72 @@
+services:
+  stable:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    container_name: predictive-maintenance-api-stable
+    environment:
+      MODEL_NAME: ${MODEL_NAME:-predictive-maintenance-model}
+      MODEL_ALIAS: ${STABLE_MODEL_ALIAS:-champion}
+      DEPLOYMENT_TRACK: stable
+      MLFLOW_TRACKING_URI: ${CANARY_MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      FEAST_REPO_PATH: /app/feature_repo
+      FEAST_REDIS_CONNECTION_STRING: ${CANARY_FEAST_REDIS_CONNECTION_STRING:-redis:6379}
+    expose:
+      - "8000"
+    volumes:
+      - ../feature_repo:/app/feature_repo:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  canary:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    container_name: predictive-maintenance-api-canary
+    environment:
+      MODEL_NAME: ${MODEL_NAME:-predictive-maintenance-model}
+      MODEL_ALIAS: ${CANARY_MODEL_ALIAS:-champion}
+      DEPLOYMENT_TRACK: canary
+      MLFLOW_TRACKING_URI: ${CANARY_MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      FEAST_REPO_PATH: /app/feature_repo
+      FEAST_REDIS_CONNECTION_STRING: ${CANARY_FEAST_REDIS_CONNECTION_STRING:-redis:6379}
+    expose:
+      - "8000"
+    volumes:
+      - ../feature_repo:/app/feature_repo:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  canary-gateway:
+    image: nginx:1.27-alpine
+    container_name: predictive-maintenance-canary-gateway
+    ports:
+      - "8010:80"
+    volumes:
+      - ./nginx/nginx.active.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      stable:
+        condition: service_healthy
+      canary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  default:
+    name: infra_default

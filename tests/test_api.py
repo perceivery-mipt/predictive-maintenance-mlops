@@ -47,10 +47,12 @@ def test_health_endpoint(monkeypatch):
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "model_loaded": True,
-    }
+
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["model_loaded"] is True
+    assert payload["deployment_track"] == "single"
+    assert payload["model_alias"] == "champion"
 
 
 def test_model_info_endpoint(monkeypatch):

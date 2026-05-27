@@ -51,6 +51,8 @@
           - "--exclude=.git"
           - "--exclude=.venv"
           - "--exclude=mlruns"
+          - "--exclude=reports/evidently/*.html"
+          - "--exclude=reports/evidently/*.json"
           - "--exclude=data/raw/*.csv"
           - "--exclude=data/processed/*.csv"
           - "--exclude=data/processed/*.parquet"
@@ -60,9 +62,15 @@
           - "--exclude=.DS_Store"
       become: false
 
-    - name: Build Docker images
+    - name: Build main Docker images
       ansible.builtin.command:
         cmd: docker compose -f "{{ compose_file }}" build
+        chdir: "{{ remote_project_dir }}"
+      changed_when: true
+
+    - name: Build canary Docker images
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ canary_compose_file }}" build
         chdir: "{{ remote_project_dir }}"
       changed_when: true
 
@@ -97,6 +105,7 @@
         FEAST_REDIS_CONNECTION_STRING=localhost:16379 python pipelines/check_feature_store.py
         MLFLOW_TRACKING_URI=http://127.0.0.1:5050 python pipelines/train_mlflow.py
         MLFLOW_TRACKING_URI=http://127.0.0.1:5050 python pipelines/promote_model.py
+        python pipelines/check_data_drift.py
       args:
         chdir: "{{ remote_project_dir }}"
         executable: /bin/bash
@@ -108,24 +117,72 @@
         chdir: "{{ remote_project_dir }}"
       changed_when: true
 
+    - name: Start canary inference gateway
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ canary_compose_file }}" up -d --build
+        chdir: "{{ remote_project_dir }}"
+      changed_when: true
+
     - name: Wait for service health endpoints
       ansible.builtin.uri:
         url: "{{ item.url }}"
         method: GET
         status_code: 200
       register: service_health
-      retries: 30
+      retries: 40
       delay: 5
       until: service_health.status == 200
       loop: "{{ healthcheck_urls }}"
 
-    - name: Show running containers
+    - name: Smoke test production-like inference through Feast Redis
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8000/predict/from-feature-store
+        method: POST
+        body_format: json
+        body:
+          machine_id: 1
+        status_code: 200
+      register: feature_store_prediction
+      retries: 10
+      delay: 5
+      until: feature_store_prediction.status == 200
+
+    - name: Check canary traffic distribution
+      ansible.builtin.shell: |
+        set -e
+        N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
+      args:
+        chdir: "{{ remote_project_dir }}"
+        executable: /bin/bash
+      register: canary_distribution
+      changed_when: false
+
+    - name: Show main running containers
       ansible.builtin.command:
         cmd: docker compose -f "{{ compose_file }}" ps
         chdir: "{{ remote_project_dir }}"
       register: compose_ps
       changed_when: false
 
-    - name: Print running containers
+    - name: Show canary running containers
+      ansible.builtin.command:
+        cmd: docker compose -f "{{ canary_compose_file }}" ps
+        chdir: "{{ remote_project_dir }}"
+      register: canary_compose_ps
+      changed_when: false
+
+    - name: Print main running containers
       ansible.builtin.debug:
         var: compose_ps.stdout_lines
+
+    - name: Print canary running containers
+      ansible.builtin.debug:
+        var: canary_compose_ps.stdout_lines
+
+    - name: Print production-like prediction response
+      ansible.builtin.debug:
+        var: feature_store_prediction.json
+
+    - name: Print canary distribution
+      ansible.builtin.debug:
+        var: canary_distribution.stdout_lines

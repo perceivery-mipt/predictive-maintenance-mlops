@@ -1,6 +1,7 @@
 project_name: predictive-maintenance-mlops
 remote_project_dir: /opt/predictive-maintenance-mlops
 compose_file: infra/docker-compose.yml
+canary_compose_file: infra/docker-compose.canary.yml
 
 required_packages:
   - ca-certificates
@@ -12,6 +13,8 @@ required_packages:
 healthcheck_urls:
   - name: fastapi
     url: http://127.0.0.1:8000/health
+  - name: canary-gateway
+    url: http://127.0.0.1:8010/health
   - name: mlflow
     url: http://127.0.0.1:5050
   - name: airflow
@@ -20,3 +23,5 @@ healthcheck_urls:
     url: http://127.0.0.1:9090/-/healthy
   - name: grafana
     url: http://127.0.0.1:3000/api/health
+  - name: node-exporter
+    url: http://127.0.0.1:9100/metrics

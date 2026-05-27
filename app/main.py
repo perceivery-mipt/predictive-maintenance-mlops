@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from time import perf_counter
 
 import pandas as pd
@@ -8,10 +9,18 @@ from app.model_loader import MODEL_ALIAS, MODEL_NAME, get_model_uri, load_model
 from app.schemas import ModelInfoResponse, PredictionRequest, PredictionResponse
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model
+    model = load_model()
+    yield
+
+
 app = FastAPI(
     title="Predictive Maintenance Inference API",
     description="API for predicting industrial equipment failure risk.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 REQUEST_COUNT = Counter(
@@ -36,12 +45,6 @@ PREDICTION_RISK_COUNT = Counter(
 )
 
 model = None
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    global model
-    model = load_model()
 
 
 def get_risk_level(probability: float) -> str:

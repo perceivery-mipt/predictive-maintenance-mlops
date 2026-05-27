@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: predictive-maintenance-postgres
+    environment:
+      POSTGRES_DB: mlops
+      POSTGRES_USER: mlops
+      POSTGRES_PASSWORD: mlops
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlops -d mlops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
+    container_name: predictive-maintenance-mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql+psycopg2://mlops:mlops@postgres:5432/mlops
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    ports:
+      - "5050:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    command:
+      - /bin/sh
+      - -c
+      - |
+        pip install psycopg2-binary==2.9.10
+        mlflow server \
+          --backend-store-uri postgresql+psycopg2://mlops:mlops@postgres:5432/mlops \
+          --serve-artifacts \
+          --artifacts-destination /mlflow/artifacts \
+          --default-artifact-root mlflow-artifacts:/ \
+          --host 0.0.0.0 \
+          --port 5000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    container_name: predictive-maintenance-api
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MODEL_NAME: predictive-maintenance-model
+      MODEL_ALIAS: champion
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:

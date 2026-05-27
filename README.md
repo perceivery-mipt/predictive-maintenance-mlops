@@ -19,6 +19,10 @@
 - оркестрацию пайплайнов с помощью Airflow;
 - сервинг модели через FastAPI;
 - мониторинг сервиса и модели через Prometheus и Grafana;
+- infrastructure monitoring через Node Exporter;
+- SLO as Code и Prometheus alert rules для latency, error rate и online feature retrieval;
+- data drift monitoring через Evidently AI;
+- Infrastructure as Code через Docker Compose и Ansible;
 - quality gate для принятия решения о продвижении модели;
 - логику переобучения и замены production-модели.
 
@@ -34,7 +38,9 @@
 | Управление экспериментами | MLflow | Логирование параметров, метрик и артефактов |
 | Реестр моделей | MLflow Model Registry | Хранение версий моделей и champion/challenger-логика |
 | Мониторинг | Prometheus, Grafana | Технический и модельный мониторинг |
-| Infrastructure as Code | Docker Compose | Воспроизводимое развертывание инфраструктуры |
+| Инфраструктурный мониторинг | Node Exporter | Метрики виртуальной машины и контейнерной инфраструктуры |
+| Drift monitoring | Evidently AI | HTML-отчёт и JSON summary по data drift |
+| Infrastructure as Code | Docker Compose, Ansible | Воспроизводимое развертывание инфраструктуры |
 | CI/CD | GitHub Actions | Проверка, сборка и подготовка к деплою |
 
 ## 1. Бизнес-задача
@@ -106,11 +112,17 @@ FastAPI inference service
   - /health
   - /model/info
   - /predict
+  - /predict/from-feature-store
   - /metrics
         ↓
 Monitoring
   - Prometheus
   - Grafana
+  - Node Exporter
+        ↓
+Data drift monitoring
+  - Evidently HTML report
+  - Evidently JSON summary
         ↓
 Orchestration
   - Airflow DAG
@@ -124,9 +136,12 @@ MLflow         — Tracking Server и Model Registry
 Redis          — Feast online store
 FastAPI        — online inference API
 Airflow        — orchestration DAG
-Prometheus     — сбор метрик API
+Prometheus     — сбор метрик API и инфраструктуры
+Node Exporter  — инфраструктурные метрики VM/container host
 Grafana        — dashboard мониторинга
 ```
+
+Формальный слой Infrastructure as Code реализуется через Docker Compose и Ansible: Docker Compose описывает микросервисный контур, а Ansible отвечает за подготовку виртуальной машины и воспроизводимый deployment.
 
 ## 4. Основные компоненты проекта
 
@@ -134,6 +149,7 @@ Grafana        — dashboard мониторинга
 app/
   main.py                         FastAPI-приложение
   model_loader.py                 загрузка champion-модели из MLflow Registry
+  feature_store_loader.py         загрузка Feast FeatureStore для online retrieval
   schemas.py                      Pydantic-схемы request/response
 
 pipelines/
@@ -141,6 +157,7 @@ pipelines/
   prepare_data.py                 подготовка признаков
   build_feature_store_dataset.py  подготовка parquet-source для Feast
   check_feature_store.py          проверка offline и online retrieval в Feast
+  check_data_drift.py             Evidently data drift report pipeline
   train_baseline.py               baseline training
   train_mlflow.py                 обучение кандидатов с логированием в MLflow
   promote_model.py                promotion лучшей модели в champion
@@ -162,7 +179,19 @@ infra/
   Dockerfile.airflow              Dockerfile для Airflow
   requirements-airflow.txt        отдельные зависимости Airflow
   prometheus/prometheus.yml       конфигурация Prometheus
+  prometheus/rules/               Prometheus alert rules / SLO rules
   grafana/                        provisioning Grafana datasource/dashboard
+
+ansible/
+  inventory.ini                   inventory для VM
+  group_vars/all.yml              параметры deployment
+  playbook.yml                    Ansible IaC deployment
+  README.md                       инструкция по Ansible-развёртыванию
+
+docs/
+  adr/                            ADR-документы
+  slo/                            Sloth-compatible SLO specification
+  sli_slo.md                      описание SLI/SLO, quality gate и drift monitoring
 
 tests/
   test_api.py                     API-тесты
@@ -205,8 +234,13 @@ FastAPI service предоставляет endpoints:
 GET  /health
 GET  /model/info
 POST /predict
+POST /predict/from-feature-store
 GET  /metrics
 ```
+
+Endpoint `/predict` принимает полный набор признаков в request body.
+
+Endpoint `/predict/from-feature-store` принимает только `machine_id`, получает online-признаки из Feast Redis Online Store и выполняет inference champion-моделью из MLflow Model Registry.
 
 Пример запроса:
 
@@ -238,6 +272,27 @@ curl -X POST http://127.0.0.1:8000/predict \
 }
 ```
 
+Пример запроса через Feast Online Store:
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
+```
+
+Пример ответа:
+
+```json
+{
+  "failure_probability": 0.014700660952716337,
+  "prediction": 0,
+  "risk_level": "low",
+  "recommended_action": "continue_normal_operation",
+  "model_name": "predictive-maintenance-model",
+  "model_alias": "champion"
+}
+```
+
 ## 7. Порты сервисов
 
 ```text
@@ -247,6 +302,7 @@ PostgreSQL        localhost:15432
 Redis             localhost:16379
 Airflow UI        http://127.0.0.1:8081
 Prometheus        http://127.0.0.1:9090
+Node Exporter     http://127.0.0.1:9100
 Grafana           http://127.0.0.1:3000
 ```
 
@@ -318,6 +374,13 @@ make docker-up-api
 
 ```bash
 make docker-ps
+```
+
+Проверить drift данных:
+
+```bash
+make drift-check
+open reports/evidently/data_drift_report.html
 ```
 
 ## 9. Полный Docker Compose контур
@@ -397,12 +460,38 @@ predict_requests_total
 predict_errors_total
 predict_latency_seconds
 prediction_risk_level_total
+feature_retrieval_requests_total
+feature_retrieval_errors_total
+feature_retrieval_latency_seconds
 ```
 
 Prometheus scrape target:
 
 ```text
 api:8000/metrics
+node-exporter:9100/metrics
+prometheus:9090/metrics
+```
+
+Prometheus alert rules:
+
+```text
+PredictiveMaintenanceHighLatency
+PredictiveMaintenanceHighErrorRate
+PredictiveMaintenanceApiDown
+PredictiveMaintenanceFeatureRetrievalErrors
+```
+
+SLO as Code specification:
+
+```text
+docs/slo/predictive-maintenance-slo.yaml
+```
+
+Prometheus rules:
+
+```text
+infra/prometheus/rules/predictive-maintenance-alerts.yml
 ```
 
 Проверка Prometheus:
@@ -410,6 +499,9 @@ api:8000/metrics
 ```bash
 curl http://127.0.0.1:9090/-/healthy
 curl "http://127.0.0.1:9090/api/v1/query?query=predict_requests_total"
+curl "http://127.0.0.1:9090/api/v1/query?query=feature_retrieval_requests_total"
+curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
+curl "http://127.0.0.1:9090/api/v1/rules"
 ```
 
 Проверка Grafana:
@@ -460,6 +552,9 @@ make test
 ```bash
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/model/info
+curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
 ```
 
 Проверка MLflow:
@@ -480,6 +575,12 @@ curl http://127.0.0.1:8081/health
 curl "http://127.0.0.1:9090/api/v1/targets"
 ```
 
+Проверка Prometheus SLO rules:
+
+```bash
+curl "http://127.0.0.1:9090/api/v1/rules"
+```
+
 Проверка Grafana:
 
 ```bash
@@ -492,6 +593,14 @@ curl http://127.0.0.1:3000/api/health
 docker compose -f infra/docker-compose.yml ps
 ```
 
+Проверка Evidently drift report:
+
+```bash
+make drift-check
+open reports/evidently/data_drift_report.html
+cat reports/evidently/data_drift_summary.json
+```
+
 ## Жизненный цикл модели
 
 1. Сырые сенсорные данные сохраняются в PostgreSQL.
@@ -501,8 +610,8 @@ docker compose -f infra/docker-compose.yml ps
 5. Модели-кандидаты обучаются и логируются в MLflow.
 6. Evaluation pipeline сравнивает модель-кандидат с текущей champion-моделью.
 7. Quality gate принимает решение о продвижении или отклонении модели.
-8. FastAPI обслуживает текущую champion-модель.
-9. Мониторинг отслеживает технические сбои, деградацию модели и drift данных.
+8. FastAPI обслуживает текущую champion-модель через прямой inference endpoint `/predict` и production-like endpoint `/predict/from-feature-store` с online feature retrieval из Feast Redis.
+9. Мониторинг отслеживает технические сбои, latency, error rate, online feature retrieval, деградацию модели и drift данных.
 10. При деградации качества запускается переобучение, и устаревшая модель заменяется новой валидированной моделью.
 
 ## Структура репозитория
@@ -510,15 +619,17 @@ docker compose -f infra/docker-compose.yml ps
 ```text
 app/              FastAPI-сервис инференса
 dags/             DAG-файлы Airflow
-pipelines/        Скрипты загрузки данных, обучения, оценки и продвижения модели
+pipelines/        Скрипты загрузки данных, обучения, оценки, drift monitoring и продвижения модели
 src/              Общие Python-модули проекта
 feature_repo/     Репозиторий Feast Feature Store
 infra/            Docker Compose и конфигурации мониторинга
+ansible/          Infrastructure as Code deployment через Ansible
 sql/              SQL-скрипты инициализации базы данных
 docs/             Манифест, архитектура, SLI/SLO, ADR-документы
 tests/            Unit- и API-тесты
 data/             Локальные данные для разработки
 models/           Локальные артефакты моделей
+reports/          Генерируемые Evidently-отчёты drift monitoring
 ```
 
 ## Дополнение: Infrastructure as Code
@@ -584,28 +695,25 @@ curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
 
 ## Дополнение: контроль drift данных
 
-Для контроля деградации входных данных может использоваться Evidently AI или Deepchecks. В этом проекте рекомендуется использовать Evidently AI как более лёгкий инструмент для проверки drift без ручной настройки внешнего DQOps.
+Для контроля деградации входных данных может использоваться Evidently AI или Deepchecks. В этом проекте используется Evidently AI как более лёгкий инструмент для проверки drift без ручной настройки внешнего DQOps.
 
 Целевая логика drift-контроля:
 
 1. Reference dataset берётся из исторической части подготовленного датасета.
 2. Current dataset берётся из более поздней части подготовленного датасета.
 3. Evidently строит отчёт о drift по входным признакам.
-4. Отчёт сохраняется в каталог `reports/`.
+4. Отчёт сохраняется в каталог `reports/evidently/`.
 5. Airflow может запускать drift-check как отдельную task перед обучением или перед promotion модели.
 
-Ожидаемая структура:
+Фактическая структура:
 
 ```text
-reports/
+reports/evidently/
   data_drift_report.html
-  data_drift_report.json
+  data_drift_summary.json
 
 pipelines/
   check_data_drift.py
-
-docs/
-  data_drift.md
 ```
 
 Пример команды запуска:
@@ -614,12 +722,26 @@ docs/
 python pipelines/check_data_drift.py
 ```
 
+Или через Makefile:
+
+```bash
+make drift-check
+```
+
 Проверочный результат:
 
 ```text
-Data drift report was created.
-HTML report: reports/data_drift_report.html
-JSON report: reports/data_drift_report.json
+Evidently data drift report was created.
+HTML report: reports/evidently/data_drift_report.html
+JSON summary: reports/evidently/data_drift_summary.json
+```
+
+Фактический результат текущего запуска:
+
+```text
+dataset_drift = false
+share_of_drifted_columns = 0.25
+number_of_drifted_columns = 2
 ```
 
 ## Дополнение: команды для демонстрации на защите
@@ -653,12 +775,19 @@ docker compose -f infra/docker-compose.yml exec airflow-scheduler \
 
 ```bash
 curl "http://127.0.0.1:9090/api/v1/query?query=predict_requests_total"
+curl "http://127.0.0.1:9090/api/v1/query?query=feature_retrieval_requests_total"
 ```
 
 Проверить инфраструктурные метрики:
 
 ```bash
 curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
+```
+
+Проверить Prometheus rules:
+
+```bash
+curl "http://127.0.0.1:9090/api/v1/rules"
 ```
 
 Проверить Grafana:
@@ -673,12 +802,23 @@ curl http://127.0.0.1:3000/api/health
 curl http://127.0.0.1:8081/health
 ```
 
+Проверить production-like inference через Feast Redis:
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
+```
+
 ## Дополнение: рекомендуемые скриншоты для отчёта
 
 1. `docker compose ps` со всеми сервисами.
 2. Airflow UI с успешным DAG run.
 3. MLflow UI с экспериментами и registered model.
 4. FastAPI `/docs` или успешный `/predict`.
-5. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
-6. Grafana dashboard `Predictive Maintenance API`.
-7. Git log с последовательными коммитами по компонентам.
+5. FastAPI `/predict/from-feature-store` с online retrieval из Feast Redis.
+6. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
+7. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
+8. Grafana dashboard `Predictive Maintenance API`.
+9. Evidently HTML report `reports/evidently/data_drift_report.html`.
+10. Git log с последовательными коммитами по компонентам.

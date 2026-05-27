@@ -1,0 +1,38 @@
+version: "prometheus/v1"
+service: "predictive-maintenance-api"
+labels:
+  owner: "mlops"
+  system: "predictive-maintenance"
+
+slos:
+  - name: "api-low-error-rate"
+    objective: 99
+    description: "At least 99% of prediction requests should be processed without application errors."
+    sli:
+      events:
+        error_query: |
+          sum(rate(predict_errors_total[5m]))
+        total_query: |
+          sum(rate(predict_requests_total[5m]))
+
+  - name: "api-low-latency"
+    objective: 95
+    description: "At least 95% of prediction requests should be served below 1 second."
+    sli:
+      events:
+        error_query: |
+          sum(rate(predict_latency_seconds_bucket{le="+Inf"}[5m]))
+          -
+          sum(rate(predict_latency_seconds_bucket{le="1.0"}[5m]))
+        total_query: |
+          sum(rate(predict_latency_seconds_count[5m]))
+
+  - name: "feature-retrieval-success"
+    objective: 99
+    description: "At least 99% of online feature retrieval requests from Feast Redis should be successful."
+    sli:
+      events:
+        error_query: |
+          sum(rate(feature_retrieval_errors_total[5m]))
+        total_query: |
+          sum(rate(feature_retrieval_requests_total[5m]))

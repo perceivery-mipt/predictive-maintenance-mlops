@@ -1,0 +1,10 @@
+project: predictive_maintenance
+provider: local
+registry: data/registry.db
+
+offline_store:
+  type: file
+
+online_store:
+  type: redis
+  connection_string: localhost:16379

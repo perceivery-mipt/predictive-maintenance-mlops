@@ -14,3 +14,6 @@ airflow/plugins/
 airflow/dags/__pycache__/
 
 !.gitkeep
+
+# Feast generated registry
+feature_repo/data/

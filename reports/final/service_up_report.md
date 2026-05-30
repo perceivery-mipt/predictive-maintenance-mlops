@@ -1350,7 +1350,7 @@ CI workflow находится в файле `.github/workflows/ci.yml`.
 Он запускается при `push` и `pull_request` в ветку `main`. В workflow выполняются установка Python 3.12, установка зависимостей из `requirements.txt` и запуск тестов через `pytest`.
 
 <h3>СI</h3>
-<img src="../screenshots/10_github_actions_success.png" alt="MLflow experiments" width="900">
+<img src="../../screenshots/10_github_actions_success.png" alt="MLflow experiments" width="900">
 
 # Проверка Ansible Infrastructure as Code
 
@@ -1458,7 +1458,7 @@ curl -s http://127.0.0.1:8000/metrics \
 
 
 <h3>Grafana dashboard</h3>
-<img src="../screenshots/11_grafana_dashboard_after_load.png" alt="Grafana dashboard" width="900">
+<img src="../../screenshots/11_grafana_dashboard_after_load.png" alt="Grafana dashboard" width="900">
 
 # Веб-интерфейсы для ручной проверки
 
@@ -1484,32 +1484,32 @@ admin / admin
 <h2>Скриншоты работающей системы</h2>
 
 <h3>MLflow: эксперименты</h3>
-<img src="../screenshots/01_mlflow_experiments.png" alt="MLflow experiments" width="900">
+<img src="../../screenshots/01_mlflow_experiments.png" alt="MLflow experiments" width="900">
 
 <h3>MLflow Model Registry: champion-модель</h3>
-<img src="../screenshots/02_mlflow_model_registry_champion.png" alt="MLflow champion model" width="900">
+<img src="../../screenshots/02_mlflow_model_registry_champion.png" alt="MLflow champion model" width="900">
 
 <h3>Airflow: успешный запуск DAG</h3>
-<img src="../screenshots/03_airflow_dag_success.png" alt="Airflow DAG success" width="900">
+<img src="../../screenshots/03_airflow_dag_success.png" alt="Airflow DAG success" width="900">
 
 <h3>Prometheus targets</h3>
-<img src="../screenshots/04_prometheus_targets.png" alt="Prometheus targets" width="900">
+<img src="../../screenshots/04_prometheus_targets.png" alt="Prometheus targets" width="900">
 
 <h3>Prometheus rules</h3>
-<img src="../screenshots/05_prometheus_rules1.png" alt="Prometheus rules" width="900">
-<img src="../screenshots/05_prometheus_rules2.png" alt="Prometheus rules" width="900">
+<img src="../../screenshots/05_prometheus_rules1.png" alt="Prometheus rules" width="900">
+<img src="../../screenshots/05_prometheus_rules2.png" alt="Prometheus rules" width="900">
 
 <h3>Grafana dashboard</h3>
-<img src="../screenshots/06_grafana_dashboard1.png" alt="Grafana dashboard" width="900">
-<img src="../screenshots/06_grafana_dashboard2.png" alt="Grafana dashboard" width="900">
+<img src="../../screenshots/06_grafana_dashboard1.png" alt="Grafana dashboard" width="900">
+<img src="../../screenshots/06_grafana_dashboard2.png" alt="Grafana dashboard" width="900">
 
 <h3>FastAPI Swagger UI</h3>
-<img src="../screenshots/07_fastapi_docs.png" alt="FastAPI docs" width="900">
+<img src="../../screenshots/07_fastapi_docs.png" alt="FastAPI docs" width="900">
 
 <h3>Evidently drift report</h3>
-<img src="../screenshots/08_evidently_report1.png" alt="Evidently drift report" width="900">
-<img src="../screenshots/08_evidently_report2.png" alt="Evidently drift report" width="900">
+<img src="../../screenshots/08_evidently_report1.png" alt="Evidently drift report" width="900">
+<img src="../../screenshots/08_evidently_report2.png" alt="Evidently drift report" width="900">
 
 <h3>Canary traffic switching</h3>
-<img src="../screenshots/09_canary.png" alt="Canary traffic distribution" width="900">
+<img src="../../screenshots/09_canary.png" alt="Canary traffic distribution" width="900">
 

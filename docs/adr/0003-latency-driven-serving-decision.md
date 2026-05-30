@@ -17,7 +17,15 @@
 
 Необходимо принять архитектурное решение не на глаз, а на основе Metrics Driven Development.
 
-## Decision
+### Расчёт A/B-теста
+
+Подробный расчёт A/B-теста, визуализация распределений latency, p-value и вывод по MDD приведены в ноутбуке:
+
+```text
+notebooks/mdd_ab_test_latency.ipynb
+```
+
+## Решение
 
 Для сравнения двух систем используется статистический анализ latency.
 
@@ -67,12 +75,13 @@ alpha = 0.05
 - endpoint `/predict` выполняет inference по признакам, переданным напрямую в request body;
 - endpoint `/predict/from-feature-store` выполняет production-like inference: принимает `machine_id`, получает online-признаки из Feast Redis Online Store и затем применяет champion-модель из MLflow Model Registry;
 - online-признаки хранятся в Redis через Feast Online Store;
-- PostgreSQL используется как offline store и постоянное хранилище;
+- parquet-файл используется как Feast offline source для исторических признаков;
+- PostgreSQL используется как backend store для MLflow и metadata database для Airflow;
 - Prometheus собирает latency, request count, error rate и метрики online feature retrieval;
 - Grafana визуализирует технические SLI;
 - p95 latency включается в SLO и quality gate;
 - успешность online feature retrieval включается в SLO и Prometheus alert rules;
-- модель-кандидат не может быть продвинута в production, если нарушает latency SLO.
+- latency SLO фиксируется как production constraint: модель-кандидат не должна продвигаться в production, если её serving-контур нарушает latency SLO.
 
 ## Последствия
 

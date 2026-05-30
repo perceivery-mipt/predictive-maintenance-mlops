@@ -1,0 +1,18 @@
+{
+  "reference_rows": 7000,
+  "current_rows": 3000,
+  "features": [
+    "air_temperature_k",
+    "process_temperature_k",
+    "rotational_speed_rpm",
+    "torque_nm",
+    "tool_wear_min",
+    "machine_type_H",
+    "machine_type_L",
+    "machine_type_M"
+  ],
+  "dataset_drift": false,
+  "share_of_drifted_columns": 0.25,
+  "number_of_drifted_columns": 2,
+  "html_report_path": "reports/evidently/data_drift_report.html"
+}

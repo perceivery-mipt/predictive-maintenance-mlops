@@ -11,7 +11,7 @@ SLI используются для измерения фактического 
 - ML quality gate для продвижения модели;
 - data quality / drift monitoring.
 
-Такое разделение важно, потому что не все метрики ML-системы являются Prometheus SLO. Latency, error rate и feature retrieval success выражаются через Prometheus-запросы. Recall, F1-score и ROC-AUC относятся к quality gate в training pipeline. Drift данных контролируется отдельным Evidently-отчётом.
+Такое разделение важно, потому что не все метрики ML-системы являются Prometheus SLO. Latency, error rate и feature retrieval success выражаются через Prometheus-запросы. Recall, F1-score и ROC-AUC относятся к model quality gate в training pipeline. Drift данных контролируется отдельным Evidently-отчётом.
 
 ## 2. Сервисные SLI/SLO prediction service
 
@@ -58,20 +58,21 @@ infra/prometheus/rules/predictive-maintenance-alerts.yml
 
 ## 3. Инфраструктурные SLI и alerts
 
-Инфраструктурный мониторинг нужен для контроля работоспособности контейнерного контура.
+Инфраструктурный мониторинг нужен для контроля работоспособности контейнерного контура и виртуальной машины.
 
 | Компонент | SLI | Метрика / проверка | Целевое состояние | Действие при нарушении |
 |---|---|---|---|---|
-| FastAPI | Health endpoint | `GET /health` | HTTP 200, `model_loaded=true` | Проверка логов API, MLflow Registry, модели |
+| FastAPI | Health endpoint | `GET /health` | HTTP 200, `model_loaded=true` | Проверка логов API, MLflow Registry, загрузки модели |
 | MLflow | Tracking server availability | `GET http://127.0.0.1:5050` | HTTP 200 | Проверка MLflow, PostgreSQL backend store, artifacts |
-| Airflow | Webserver health | `GET /health` | metadatabase и scheduler healthy | Проверка scheduler/webserver/logs |
+| Airflow | Webserver health | `GET /health` | HTTP 200, webserver доступен | Проверка scheduler/webserver/logs, DAG runs через UI или CLI |
 | Prometheus | Health endpoint | `GET /-/healthy` | `Prometheus Server is Healthy` | Проверка config, rule files, targets |
 | Grafana | Health endpoint | `GET /api/health` | database `ok` | Проверка provisioning и datasource |
 | Node Exporter | Infrastructure metrics | `node_cpu_seconds_total` | метрика доступна в Prometheus | Проверка node-exporter target |
 | Redis | Online Store availability | container healthcheck `redis-cli ping` | healthy | Перезапуск Redis, повторная materialization |
 | PostgreSQL | DB availability | container healthcheck `pg_isready` | healthy | Проверка контейнера, volume, credentials |
+| Canary gateway | Gateway health | `GET /health` на `:8010` | HTTP 200, backend отвечает | Проверка Nginx config, stable/canary services, rollback |
 
-Node Exporter используется для сбора инфраструктурных метрик. Пример проверки:
+Node Exporter используется для сбора инфраструктурных метрик VM/container host. Пример проверки:
 
 ```bash
 curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
@@ -99,7 +100,9 @@ f1        = 0.647059
 roc_auc   = 0.967528
 ```
 
-Модель продвигается в MLflow Model Registry как `champion` только при прохождении quality gate.
+Модель продвигается в MLflow Model Registry как `champion` только при прохождении model quality gate.
+
+Latency, error rate и feature retrieval success не входят напрямую в кодовый model quality gate. Они контролируются отдельно как технические SLO production-сервиса и учитываются при rollout/rollback и эксплуатационных решениях.
 
 ## 5. Data quality и drift monitoring
 
@@ -151,9 +154,13 @@ DQOps в текущей версии не используется как обя
 
 В рамках проекта эти бизнесовые SLO используются как целевой контекст для выбора ML-метрик и архитектуры мониторинга.
 
-## 7. Условия вывода модели из эксплуатации
+## 7. Условия operational review, rollback и retraining
 
-Production-модель должна быть выведена из эксплуатации и заменена новой валидированной моделью, если выполняется хотя бы одно из условий:
+Нарушение перечисленных ниже условий является основанием для operational review, rollback canary traffic, повторного запуска training pipeline/DAG или отказа от promotion модели-кандидата.
+
+В текущей реализации это не полностью автоматический control loop. Система предоставляет мониторинг, drift report, Airflow DAG, MLflow champion promotion и canary rollback, но решение о повторном запуске retraining или замене champion-модели принимается как эксплуатационное действие.
+
+Условия, требующие реакции:
 
 - recall по классу отказа на новой размеченной выборке ниже 0.75;
 - ROC-AUC ниже 0.80;
@@ -164,7 +171,7 @@ Production-модель должна быть выведена из эксплу
 - Evidently фиксирует существенный drift данных;
 - нарушена схема признаков между Feast definitions и inference service.
 
-Вывод модели из эксплуатации выполняется не прямым удалением модели, а переключением production-сервиса на новую champion-модель, которая прошла quality gate.
+Замена champion-модели выполняется не прямым удалением старой модели, а обновлением alias `champion` в MLflow Model Registry после обучения новой модели и прохождения model quality gate. Для безопасного переключения serving traffic используется canary gateway и rollback на stable.
 
 ## 8. Реакция системы на нарушения
 
@@ -173,10 +180,10 @@ Production-модель должна быть выведена из эксплу
 | Тип нарушения | Пример | Реакция |
 |---|---|---|
 | Технический инцидент | API недоступен, высокий error rate | Проверка логов, restart, rollback |
-| Деградация latency | p95 latency выше SLO | Анализ нагрузки, модели, feature retrieval и инфраструктуры |
+| Деградация latency | p95 latency выше SLO | Анализ нагрузки, модели, feature retrieval и инфраструктуры; rollback при необходимости |
 | Ошибка Feature Store | Рост `feature_retrieval_errors_total` | Проверка Redis, Feast registry, materialization |
-| Деградация модели | Recall/F1/ROC-AUC ниже quality gate | Retraining DAG, запрет promotion |
-| Drift данных | Evidently обнаружил drift | Анализ источников данных, retraining, обновление feature pipeline |
+| Деградация модели | Recall/F1/ROC-AUC ниже quality gate | Повторный запуск training pipeline/DAG, отказ от promotion текущего кандидата |
+| Drift данных | Evidently обнаружил drift | Анализ источников данных, повторный запуск training pipeline при необходимости, обновление feature pipeline |
 
 ## 9. Связь SLI/SLO с архитектурой
 
@@ -184,12 +191,14 @@ SLI/SLO покрывают ключевые компоненты архитек�
 
 - FastAPI отвечает за production-инференс;
 - Feast и Redis отвечают за online feature retrieval;
-- PostgreSQL хранит backend state и данные;
+- parquet feature dataset используется как Feast offline source;
+- PostgreSQL хранит backend state MLflow и metadata database Airflow;
 - Airflow автоматизирует ML pipeline;
 - MLflow управляет экспериментами и версиями моделей;
 - Prometheus и Grafana отвечают за мониторинг;
 - Node Exporter отвечает за инфраструктурные метрики;
 - Evidently AI отвечает за drift monitoring;
-- quality gate отвечает за безопасную замену модели.
+- Nginx canary gateway отвечает за weighted traffic switching и rollback;
+- model quality gate отвечает за безопасное продвижение новой champion-модели.
 
-Таким образом, система контролируется на техническом, модельном и бизнесовом уровнях, а решение о переобучении или замене модели принимается на основе измеримых метрик.
+Таким образом, система контролируется на техническом, модельном и бизнесовом уровнях, а решение о переобучении или замене модели принимается на основе измеримых метрик и эксплуатационного анализа.

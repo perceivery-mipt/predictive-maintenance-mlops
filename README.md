@@ -4,6 +4,61 @@
 
 Система предсказывает риск отказа оборудования по телеметрическим признакам: температура воздуха, температура процесса, скорость вращения, крутящий момент, износ инструмента и тип оборудования.
 
+## Публичный cloud deployment
+
+Проект развёрнут на виртуальной машине через Ansible. Файл `ansible/inventory.ini` в репозитории оставлен как шаблон; для реального запуска в нём нужно указать IP виртуальной машины, SSH-пользователя и путь к приватному ключу.
+
+### Публичные UI и endpoints
+
+| Сервис | Публичная ссылка | Назначение |
+|---|---|---|
+| FastAPI health | http://158.160.13.227:8000/health | Проверка доступности API и загруженной champion-модели |
+| FastAPI Swagger UI | http://158.160.13.227:8000/docs | Интерактивная документация API |
+| MLflow UI | http://158.160.13.227:5050 | Эксперименты, метрики, артефакты и Model Registry |
+| Airflow UI | http://158.160.13.227:8081 | Оркестрация ML-пайплайна |
+| Prometheus UI | http://158.160.13.227:9090 | Метрики, targets и alert rules |
+| Grafana UI | http://158.160.13.227:3000 | Dashboard мониторинга API и инфраструктуры |
+| Canary gateway health | http://158.160.13.227:8010/health | Проверка Nginx canary gateway |
+
+Airflow login:
+
+```text
+username: admin
+password: admin
+```
+
+Grafana login:
+
+```text
+username: admin
+password: admin
+```
+
+### Быстрая проверка облачного сервиса
+
+```bash
+curl http://158.160.13.227:8000/health
+
+curl -X POST http://158.160.13.227:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
+
+curl http://158.160.13.227:8010/health
+```
+
+Ожидаемый ответ production-like inference через Feast Redis и MLflow champion model:
+
+```json
+{
+  "failure_probability": 0.014700660952716337,
+  "prediction": 0,
+  "risk_level": "low",
+  "recommended_action": "continue_normal_operation",
+  "model_name": "predictive-maintenance-model",
+  "model_alias": "champion"
+}
+```
+
 ## Заявленный уровень зрелости ML-системы
 
 В проекте заявлен уровень зрелости ML-системы 2.
@@ -11,21 +66,23 @@
 Система включает:
 
 - версионирование исходного кода с помощью Git;
-- CI/CD с помощью GitHub Actions;
+- CI с помощью GitHub Actions;
+- воспроизводимый deployment на VM через Ansible;
 - Feature Store на базе Feast;
-- offline-хранилище признаков в PostgreSQL;
-- online-хранилище признаков в Redis;
+- offline source для Feast на базе parquet-файла;
+- online store признаков в Redis;
+- PostgreSQL как backend store для MLflow и metadata database для Airflow;
 - систему управления экспериментами и реестр моделей на базе MLflow;
-- оркестрацию пайплайнов с помощью Airflow;
+- оркестрацию ML-пайплайна с помощью Airflow;
 - сервинг модели через FastAPI;
 - canary deployment inference service через Nginx weighted upstream;
 - monitoring сервиса и модели через Prometheus и Grafana;
 - infrastructure monitoring через Node Exporter;
-- SLO as Code и Prometheus alert rules для latency, error rate и online feature retrieval;
+- SLO as Code и Prometheus alert rules для latency, error rate, API availability и online feature retrieval;
 - data drift monitoring через Evidently AI;
 - Infrastructure as Code через Docker Compose и Ansible;
 - quality gate для принятия решения о продвижении модели;
-- логику переобучения и замены production-модели.
+- повторяемую логику обучения, оценки и замены champion-модели после прохождения quality gate.
 
 ## Основные компоненты
 
@@ -33,17 +90,18 @@
 |---|---|---|
 | API-сервис | FastAPI | Онлайн-инференс модели |
 | Feature Store | Feast | Единое управление признаками для обучения и инференса |
-| Offline Store | PostgreSQL | Исторические признаки и исходные данные |
+| Offline source | Parquet | Исторические признаки для Feast offline retrieval |
 | Online Store | Redis | Быстрый доступ к online-признакам |
+| Backend database | PostgreSQL | MLflow backend store и Airflow metadata database |
 | Оркестратор | Airflow | Автоматизация ML-пайплайна |
 | Управление экспериментами | MLflow | Логирование параметров, метрик и артефактов |
-| Реестр моделей | MLflow Model Registry | Хранение версий моделей и champion/challenger-логика |
+| Реестр моделей | MLflow Model Registry | Хранение версий моделей и champion-логика |
 | API traffic switching | Nginx, Docker Compose | Canary rollout 90/10, 50/50, 100% и rollback |
 | Мониторинг | Prometheus, Grafana | Технический и модельный мониторинг |
-| Инфраструктурный мониторинг | Node Exporter | Метрики виртуальной машины и контейнерной инфраструктуры |
+| Инфраструктурный мониторинг | Node Exporter | Метрики виртуальной машины и container host |
 | Drift monitoring | Evidently AI | HTML-отчёт и JSON summary по data drift |
 | Infrastructure as Code | Docker Compose, Ansible | Воспроизводимое развертывание инфраструктуры |
-| CI/CD | GitHub Actions | Проверка, сборка и подготовка к деплою |
+| CI | GitHub Actions | Автоматический запуск тестов при push и pull request |
 
 ## 1. Бизнес-задача
 
@@ -55,6 +113,8 @@
 - `critical` — остановить машину и провести срочное обслуживание.
 
 Такой сценарий полезен для производственных линий, где внеплановый простой оборудования приводит к финансовым потерям, нарушению SLA и росту операционных рисков.
+
+Главная бизнес-метрика проекта — снижение пропущенных отказов оборудования. Поэтому для ML-модели приоритетным показателем является recall по классу отказа.
 
 ## 2. Датасет
 
@@ -87,7 +147,7 @@ machine_failure
 1 — 339 наблюдений
 ```
 
-Поэтому в моделях используется балансировка классов, а главным бизнес-показателем является recall по классу отказа.
+Поэтому в моделях используется балансировка классов, а главным ML-показателем для business goal является recall по классу отказа.
 
 ## 3. Архитектура системы
 
@@ -134,6 +194,10 @@ Data drift monitoring
         ↓
 Orchestration
   - Airflow DAG
+        ↓
+Infrastructure as Code
+  - Docker Compose
+  - Ansible VM deployment
 ```
 
 Инфраструктура поднимается через Docker Compose:
@@ -150,7 +214,7 @@ Node Exporter  — инфраструктурные метрики VM/container 
 Grafana        — dashboard мониторинга
 ```
 
-Формальный слой Infrastructure as Code реализуется через Docker Compose и Ansible: Docker Compose описывает микросервисный контур, а Ansible отвечает за подготовку виртуальной машины и воспроизводимый deployment.
+Формальный слой Infrastructure as Code реализуется через Docker Compose и Ansible: Docker Compose описывает микросервисный контур, а Ansible отвечает за подготовку виртуальной машины, копирование проекта, сборку образов, запуск контейнеров и проверку health endpoints.
 
 ## 4. Основные компоненты проекта
 
@@ -183,7 +247,7 @@ dags/
                                   Airflow DAG полного ML pipeline
 
 infra/
-  docker-compose.yml              инфраструктурный контур
+  docker-compose.yml              основной инфраструктурный контур
   docker-compose.canary.yml       canary-контур stable/canary/gateway
   Dockerfile.api                  Dockerfile для FastAPI
   Dockerfile.airflow              Dockerfile для Airflow
@@ -199,9 +263,10 @@ scripts/
   switch_canary_100.sh            переключение traffic на 100% canary
   rollback_canary_to_stable.sh    rollback traffic на 100% stable
   check_canary_distribution.sh    проверка распределения traffic через /health
+  export_service_report.sh        экспорт GitHub-readable отчёта из notebook в markdown
 
 ansible/
-  inventory.ini                   inventory для VM
+  inventory.ini                   шаблон inventory для VM
   group_vars/all.yml              параметры deployment
   playbook.yml                    Ansible IaC deployment
   README.md                       инструкция по Ansible-развёртыванию
@@ -213,6 +278,10 @@ docs/
 
 tests/
   test_api.py                     API-тесты
+
+reports/
+  evidently/                      Evidently drift artifacts
+  final/service_up_report.md      GitHub-readable service report
 ```
 
 ## 5. Качество модели
@@ -260,9 +329,9 @@ Endpoint `/predict` принимает полный набор признако�
 
 Endpoint `/predict/from-feature-store` принимает только `machine_id`, получает online-признаки из Feast Redis Online Store и выполняет inference champion-моделью из MLflow Model Registry.
 
-Endpoint `/health` дополнительно возвращает `deployment_track` и `model_alias`. Эти поля используются в canary-контуре для проверки, какой backend обработал запрос: `stable` или `canary`.
+Endpoint `/health` дополнительно возвращает `deployment_track` и `model_alias`. Эти поля используются в canary-контуре для проверки, какой backend обработал запрос: `stable`, `canary` или одиночный API-контур `single`.
 
-Пример запроса:
+Пример локального запроса:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
@@ -315,6 +384,8 @@ curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
 
 ## 7. Порты сервисов
 
+Локальные адреса при запуске на машине разработчика или внутри VM:
+
 ```text
 FastAPI API       http://127.0.0.1:8000
 Canary Gateway    http://127.0.0.1:8010
@@ -327,21 +398,13 @@ Node Exporter     http://127.0.0.1:9100
 Grafana           http://127.0.0.1:3000
 ```
 
-Airflow login:
+Для текущего cloud deployment вместо `127.0.0.1` используется публичный IP VM:
 
 ```text
-username: admin
-password: admin
+158.160.13.227
 ```
 
-Grafana login:
-
-```text
-username: admin
-password: admin
-```
-
-## 8. Быстрый запуск
+## 8. Быстрый локальный запуск
 
 Создать окружение и установить зависимости:
 
@@ -420,7 +483,44 @@ docker compose -f infra/docker-compose.yml ps
 
 Ожидаемый результат: основные сервисы находятся в статусе `Up`, а критичные сервисы имеют healthcheck `healthy`.
 
-## 10. Airflow orchestration
+## 10. Deployment на VM через Ansible
+
+Ansible playbook выполняет полный воспроизводимый deployment на виртуальную машину:
+
+1. устанавливает системные пакеты;
+2. устанавливает и запускает Docker;
+3. копирует проект на VM в `/opt/predictive-maintenance-mlops`;
+4. собирает Docker-образы;
+5. поднимает core-инфраструктуру;
+6. запускает training pipeline и promotion champion-модели;
+7. поднимает полный MLOps-контур;
+8. поднимает canary gateway;
+9. проверяет health endpoints;
+10. выполняет smoke-test production-like inference через Feast Redis;
+11. проверяет canary traffic distribution;
+12. выводит статус контейнеров.
+
+Запуск:
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
+```
+
+`ansible/inventory.ini` в репозитории является шаблоном:
+
+```ini
+[mlops]
+mlops-vm ansible_host=YOUR_VM_IP ansible_user=ubuntu
+
+[mlops:vars]
+ansible_python_interpreter=/usr/bin/python3
+```
+
+Для реального запуска нужно заменить `YOUR_VM_IP`, `ansible_user` и при необходимости добавить `ansible_ssh_private_key_file`.
+
+На VM с 4 GB RAM рекомендуется включить swap, поскольку одновременно работают Airflow, MLflow, Prometheus, Grafana, PostgreSQL, Redis, FastAPI и canary gateway.
+
+## 11. Airflow orchestration
 
 DAG:
 
@@ -440,7 +540,7 @@ download_data
 → promote_model
 ```
 
-Запуск Airflow:
+Запуск Airflow локально:
 
 ```bash
 make airflow-init
@@ -466,7 +566,9 @@ docker compose -f infra/docker-compose.yml exec airflow-scheduler \
 success
 ```
 
-## 11. Canary deployment
+В Ansible deployment training pipeline запускается напрямую из playbook, чтобы deployment был самодостаточным и не зависел от ручного запуска DAG в UI.
+
+## 12. Canary deployment
 
 Для демонстрации постепенного вывода новой версии inference service в production используется отдельный canary-контур:
 
@@ -578,7 +680,7 @@ STABLE_MODEL_ALIAS=champion CANARY_MODEL_ALIAS=challenger \
 
 Если challenger-модель не проходит quality gate или после переключения нарушаются SLO, traffic возвращается на stable через `rollback_canary_to_stable.sh`.
 
-## 12. Monitoring
+## 13. Monitoring
 
 FastAPI отдаёт Prometheus-метрики на endpoint:
 
@@ -598,7 +700,7 @@ feature_retrieval_errors_total
 feature_retrieval_latency_seconds
 ```
 
-Prometheus scrape target:
+Prometheus scrape targets:
 
 ```text
 api:8000/metrics
@@ -649,7 +751,62 @@ Grafana dashboard:
 Predictive Maintenance / Predictive Maintenance API
 ```
 
-## 13. CI
+Dashboard содержит API-метрики, latency, request rate, distribution по risk level и infrastructure CPU usage через Node Exporter.
+
+## 14. Drift monitoring
+
+Для контроля деградации входных данных используется Evidently AI.
+
+Логика drift-контроля:
+
+1. reference dataset берётся из исторической части подготовленного датасета;
+2. current dataset берётся из более поздней части подготовленного датасета;
+3. Evidently строит отчёт о drift по входным признакам;
+4. отчёт сохраняется в каталог `reports/evidently/`;
+5. JSON summary используется как компактный machine-readable артефакт проверки.
+
+Фактическая структура:
+
+```text
+reports/evidently/
+  data_drift_report.html
+  data_drift_summary.json
+
+pipelines/
+  check_data_drift.py
+```
+
+Запуск:
+
+```bash
+python pipelines/check_data_drift.py
+```
+
+Или через Makefile:
+
+```bash
+make drift-check
+```
+
+Проверочный результат:
+
+```text
+Evidently data drift report was created.
+HTML report: reports/evidently/data_drift_report.html
+JSON summary: reports/evidently/data_drift_summary.json
+```
+
+Фактический результат текущего запуска:
+
+```text
+dataset_drift = false
+share_of_drifted_columns = 0.25
+number_of_drifted_columns = 2
+```
+
+Drift-check реализован отдельным pipeline `pipelines/check_data_drift.py` и запускается при deployment/проверке проекта. Его можно включить в Airflow DAG как отдельную task перед обучением или promotion.
+
+## 15. CI
 
 GitHub Actions workflow:
 
@@ -678,7 +835,31 @@ python -m pytest -q
 make test
 ```
 
-## 14. Проверочные команды для защиты
+## 16. MDD и ADR
+
+Metrics Driven Development оформлен отдельным ноутбуком и ADR.
+
+В проекте проведён статистический анализ latency для двух вариантов системы: baseline и candidate. В анализе есть два набора метрик, визуальное сравнение распределений, формулировка гипотез `H0` и `H1`, выбранный уровень значимости, статистический тест и итоговое архитектурное решение.
+
+ADR фиксирует выбранный тест, p-value, вывод по гипотезам и решение о принятии или отклонении архитектурного изменения.
+
+## 17. Жизненный цикл модели
+
+1. Сырые сенсорные данные загружаются воспроизводимым pipeline.
+2. Подготовленные признаки сохраняются как parquet offline source для Feast.
+3. Feast хранит определения признаков и материализует online-признаки в Redis.
+4. Training pipeline получает исторические признаки и обучает модели-кандидаты.
+5. Модели-кандидаты логируются в MLflow.
+6. Evaluation pipeline сравнивает кандидатов по ML-метрикам.
+7. Quality gate принимает решение о продвижении или отклонении модели.
+8. Лучшая валидированная модель регистрируется в MLflow Model Registry и получает alias `champion`.
+9. FastAPI обслуживает текущую champion-модель через `/predict` и production-like endpoint `/predict/from-feature-store` с online feature retrieval из Feast Redis.
+10. Canary gateway позволяет постепенно перевести traffic со stable API instance на canary API instance и выполнить rollback при нарушении SLO.
+11. Prometheus, Grafana и Node Exporter отслеживают техническое состояние сервиса и инфраструктуры.
+12. Evidently drift report фиксирует деградацию входных данных.
+13. При обнаружении drift или деградации качества retraining pipeline может быть запущен повторно; новая модель заменяет champion только после прохождения quality gate.
+
+## 18. Проверочные команды для защиты
 
 Проверка API:
 
@@ -686,6 +867,16 @@ make test
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/model/info
 curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
+```
+
+Проверка публичного cloud deployment:
+
+```bash
+curl http://158.160.13.227:8000/health
+curl -I http://158.160.13.227:8000/docs
+curl -X POST http://158.160.13.227:8000/predict/from-feature-store \
   -H "Content-Type: application/json" \
   -d '{"machine_id": 1}'
 ```
@@ -755,21 +946,15 @@ open reports/evidently/data_drift_report.html
 cat reports/evidently/data_drift_summary.json
 ```
 
-## Жизненный цикл модели
+Проверка Ansible deployment:
 
-1. Сырые сенсорные данные сохраняются в PostgreSQL.
-2. Airflow запускает валидацию данных и построение признаков.
-3. Feast хранит определения признаков и материализует признаки в Redis.
-4. Training pipeline получает исторические признаки из Feast.
-5. Модели-кандидаты обучаются и логируются в MLflow.
-6. Evaluation pipeline сравнивает модель-кандидат с текущей champion-моделью.
-7. Quality gate принимает решение о продвижении или отклонении модели.
-8. FastAPI обслуживает текущую champion-модель через прямой inference endpoint `/predict` и production-like endpoint `/predict/from-feature-store` с online feature retrieval из Feast Redis.
-9. Canary gateway позволяет постепенно перевести traffic со stable API instance на canary API instance и выполнить rollback при нарушении SLO.
-10. Мониторинг отслеживает технические сбои, latency, error rate, online feature retrieval, деградацию модели и drift данных.
-11. При деградации качества запускается переобучение, и устаревшая модель заменяется новой валидированной моделью.
+```bash
+ansible -i ansible/inventory.ini mlops -m ping
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --syntax-check
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
+```
 
-## Структура репозитория
+## 19. Структура репозитория
 
 ```text
 app/              FastAPI-сервис инференса
@@ -778,218 +963,48 @@ pipelines/        Скрипты загрузки данных, обучения
 src/              Общие Python-модули проекта
 feature_repo/     Репозиторий Feast Feature Store
 infra/            Docker Compose, Nginx canary и конфигурации мониторинга
-scripts/          Скрипты canary switching, rollback и проверок
+scripts/          Скрипты canary switching, rollback, export отчёта и проверок
 ansible/          Infrastructure as Code deployment через Ansible
 sql/              SQL-скрипты инициализации базы данных
 docs/             Манифест, архитектура, SLI/SLO, ADR-документы
 tests/            Unit- и API-тесты
 data/             Локальные данные для разработки
 models/           Локальные артефакты моделей
-reports/          Генерируемые Evidently-отчёты drift monitoring
+reports/          Evidently-отчёты и финальный GitHub-readable service report
 ```
 
-## Дополнение: Infrastructure as Code
+## 20. Рекомендуемые скриншоты для отчёта
 
-Формальный слой Infrastructure as Code реализуется через Ansible и Docker Compose.
+1. GitHub Actions CI success.
+2. Ansible ping, syntax-check и successful playbook recap `failed=0`.
+3. `docker compose ps` со всеми сервисами `Up` / `healthy`.
+4. FastAPI `/docs` или успешный `/predict/from-feature-store`.
+5. MLflow UI с экспериментами и registered champion model.
+6. Airflow UI с DAG `predictive_maintenance_training_pipeline`.
+7. Feast offline и online retrieval checks.
+8. Canary gateway: распределение 90/10, 50/50, 100% canary и rollback.
+9. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
+10. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
+11. Grafana dashboard `Predictive Maintenance API`, включая CPU usage через Node Exporter.
+12. Evidently HTML report `reports/evidently/data_drift_report.html`.
+13. Публичные cloud endpoints на VM.
 
-Docker Compose описывает состав микросервисов и их связи: PostgreSQL, Redis, MLflow, FastAPI, Airflow, Prometheus, Node Exporter, Grafana и canary gateway на базе Nginx.
+## 21. Финальный отчёт
 
-Ansible отвечает за подготовку виртуальной машины и воспроизводимое развёртывание проекта: установку системных пакетов, установку Docker, копирование проекта, сборку образов, запуск инфраструктуры и проверку health endpoints.
-
-Ожидаемая структура IaC-модуля:
+GitHub-readable версия отчёта находится в:
 
 ```text
-ansible/
-  inventory.ini
-  group_vars/
-    all.yml
-  playbook.yml
-  README.md
+reports/final/service_up_report.md
 ```
 
-Запуск развёртывания на VM:
-
-```bash
-ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
-```
-
-Проект допускает развёртывание всех микросервисов на одной виртуальной машине. Ресурсы VM могут быть обоснованы суммарным потреблением контейнеров по команде:
-
-```bash
-docker stats --no-stream
-```
-
-## Дополнение: инфраструктурный мониторинг через Node Exporter
-
-Для мониторинга инфраструктуры используется Prometheus Node Exporter.
-
-Node Exporter поднимается отдельным контейнером:
+Исходный исполняемый notebook находится в:
 
 ```text
-predictive-maintenance-node-exporter
+notebooks/service_up_report.ipynb
 ```
 
-Prometheus собирает с него системные метрики через scrape target:
-
-```text
-node-exporter:9100/metrics
-```
-
-Проверка Node Exporter:
+Markdown-отчёт генерируется из notebook командой:
 
 ```bash
-curl http://127.0.0.1:9100/metrics | head
+scripts/export_service_report.sh
 ```
-
-Проверка метрик Node Exporter через Prometheus:
-
-```bash
-curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
-```
-
-Ожидаемый результат: Prometheus возвращает `status: success`, а поле `result` содержит значения метрики `node_cpu_seconds_total`.
-
-## Дополнение: контроль drift данных
-
-Для контроля деградации входных данных может использоваться Evidently AI или Deepchecks. В этом проекте используется Evidently AI как более лёгкий инструмент для проверки drift без ручной настройки внешнего DQOps.
-
-Целевая логика drift-контроля:
-
-1. Reference dataset берётся из исторической части подготовленного датасета.
-2. Current dataset берётся из более поздней части подготовленного датасета.
-3. Evidently строит отчёт о drift по входным признакам.
-4. Отчёт сохраняется в каталог `reports/evidently/`.
-5. Airflow может запускать drift-check как отдельную task перед обучением или перед promotion модели.
-
-Фактическая структура:
-
-```text
-reports/evidently/
-  data_drift_report.html
-  data_drift_summary.json
-
-pipelines/
-  check_data_drift.py
-```
-
-Пример команды запуска:
-
-```bash
-python pipelines/check_data_drift.py
-```
-
-Или через Makefile:
-
-```bash
-make drift-check
-```
-
-Проверочный результат:
-
-```text
-Evidently data drift report was created.
-HTML report: reports/evidently/data_drift_report.html
-JSON summary: reports/evidently/data_drift_summary.json
-```
-
-Фактический результат текущего запуска:
-
-```text
-dataset_drift = false
-share_of_drifted_columns = 0.25
-number_of_drifted_columns = 2
-```
-
-## Дополнение: команды для демонстрации на защите
-
-Проверить, что репозиторий чистый:
-
-```bash
-git status
-```
-
-Проверить тесты:
-
-```bash
-python -m pytest -q
-```
-
-Проверить контейнеры:
-
-```bash
-docker compose -f infra/docker-compose.yml ps
-docker compose -f infra/docker-compose.canary.yml ps
-```
-
-Проверить успешный DAG run:
-
-```bash
-docker compose -f infra/docker-compose.yml exec airflow-scheduler \
-  airflow dags list-runs -d predictive_maintenance_training_pipeline
-```
-
-Проверить API-метрики:
-
-```bash
-curl "http://127.0.0.1:9090/api/v1/query?query=predict_requests_total"
-curl "http://127.0.0.1:9090/api/v1/query?query=feature_retrieval_requests_total"
-```
-
-Проверить инфраструктурные метрики:
-
-```bash
-curl "http://127.0.0.1:9090/api/v1/query?query=node_cpu_seconds_total"
-```
-
-Проверить Prometheus rules:
-
-```bash
-curl "http://127.0.0.1:9090/api/v1/rules"
-```
-
-Проверить Grafana:
-
-```bash
-curl http://127.0.0.1:3000/api/health
-```
-
-Проверить Airflow:
-
-```bash
-curl http://127.0.0.1:8081/health
-```
-
-Проверить production-like inference через Feast Redis:
-
-```bash
-curl -X POST http://127.0.0.1:8000/predict/from-feature-store \
-  -H "Content-Type: application/json" \
-  -d '{"machine_id": 1}'
-```
-
-Проверить canary traffic distribution:
-
-```bash
-N=50 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
-```
-
-Проверить rollback:
-
-```bash
-scripts/rollback_canary_to_stable.sh
-N=20 scripts/check_canary_distribution.sh | grep deployment_track | sort | uniq -c
-```
-
-## Дополнение: рекомендуемые скриншоты для отчёта
-
-1. `docker compose ps` со всеми сервисами.
-2. Airflow UI с успешным DAG run.
-3. MLflow UI с экспериментами и registered model.
-4. FastAPI `/docs` или успешный `/predict`.
-5. FastAPI `/predict/from-feature-store` с online retrieval из Feast Redis.
-6. Canary gateway: распределение 90/10, 50/50, 100% canary и rollback.
-7. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
-8. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
-9. Grafana dashboard `Predictive Maintenance API`.
-10. Evidently HTML report `reports/evidently/data_drift_report.html`.
-11. Git log с последовательными коммитами по компонентам.

@@ -1419,6 +1419,314 @@ PY
 ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
 ```
 
+# Развернем на ВМ через Ansible
+
+проверяем подключение 
+
+
+```bash
+%%bash
+cd "$PROJECT_ROOT"
+
+ansible -i ansible/inventory.ini mlops -m ping
+```
+
+    mlops-vm | SUCCESS => {
+        "changed": false,
+        "ping": "pong"
+    }
+
+
+Ansible успешно подключился к виртуальной машине `mlops-vm`.
+
+Ответ `ping: pong` подтверждает, что SSH-доступ по ключу работает, inventory настроен корректно, и VM готова к запуску Ansible playbook для развёртывания MLOps-инфраструктуры.
+
+Теперь проверим корректность playbook
+
+
+```bash
+%%bash
+cd "$PROJECT_ROOT"
+
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --syntax-check
+```
+
+    
+    playbook: ansible/playbook.yml
+
+
+Ansible playbook прошёл синтаксическую проверку.
+
+Команда `ansible-playbook --syntax-check` подтвердила, что файл `ansible/playbook.yml` корректно читается Ansible и может быть запущен для развёртывания проекта на VM.
+
+Запускаем проект на ВМ
+
+
+```bash
+%%bash
+cd "$PROJECT_ROOT"
+
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml
+```
+
+    
+    PLAY [Deploy predictive maintenance MLOps infrastructure] **********************
+    
+    TASK [Gathering Facts] *********************************************************
+    ok: [mlops-vm]
+    
+    TASK [Install base system packages] ********************************************
+
+
+    [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+    [DEPRECATION WARNING]: INJECT_FACTS_AS_VARS default to `True` is deprecated, top-level facts will not be auto injected after the change. This feature will be removed from ansible-core version 2.24.
+    Origin: /Users/perceivery/Desktop/predictive-maintenance-mlops/ansible/playbook.yml:13:13
+    
+    11         state: present
+    12         update_cache: true
+    13       when: ansible_os_family == "Debian"
+                   ^ column 13
+    
+    Use `ansible_facts["fact_name"]` (no `ansible_` prefix) instead.
+    
+
+
+    ok: [mlops-vm]
+    
+    TASK [Install Docker using official convenience script if docker is absent] ****
+    ok: [mlops-vm]
+    
+    TASK [Ensure Docker service is enabled and started] ****************************
+    ok: [mlops-vm]
+    
+    TASK [Add deployment user to docker group] *************************************
+    ok: [mlops-vm]
+    
+    TASK [Create remote project directory] *****************************************
+    ok: [mlops-vm]
+    
+    TASK [Synchronize project files to VM] *****************************************
+    changed: [mlops-vm]
+    
+    TASK [Build main Docker images] ************************************************
+    changed: [mlops-vm]
+    
+    TASK [Build canary Docker images] **********************************************
+    changed: [mlops-vm]
+    
+    TASK [Start core infrastructure] ***********************************************
+    changed: [mlops-vm]
+    
+    TASK [Wait for MLflow to become available] *************************************
+    ok: [mlops-vm]
+    
+    TASK [Run training pipeline and promote champion model] ************************
+    changed: [mlops-vm]
+    
+    TASK [Start full MLOps infrastructure] *****************************************
+    changed: [mlops-vm]
+    
+    TASK [Start canary inference gateway] ******************************************
+    changed: [mlops-vm]
+    
+    TASK [Wait for service health endpoints] ***************************************
+    ok: [mlops-vm] => (item={'name': 'fastapi', 'url': 'http://127.0.0.1:8000/health'})
+    ok: [mlops-vm] => (item={'name': 'canary-gateway', 'url': 'http://127.0.0.1:8010/health'})
+    ok: [mlops-vm] => (item={'name': 'mlflow', 'url': 'http://127.0.0.1:5050'})
+    FAILED - RETRYING: [mlops-vm]: Wait for service health endpoints (40 retries left).
+    FAILED - RETRYING: [mlops-vm]: Wait for service health endpoints (39 retries left).
+    FAILED - RETRYING: [mlops-vm]: Wait for service health endpoints (38 retries left).
+    FAILED - RETRYING: [mlops-vm]: Wait for service health endpoints (37 retries left).
+    FAILED - RETRYING: [mlops-vm]: Wait for service health endpoints (36 retries left).
+    ok: [mlops-vm] => (item={'name': 'airflow', 'url': 'http://127.0.0.1:8081/health'})
+    ok: [mlops-vm] => (item={'name': 'prometheus', 'url': 'http://127.0.0.1:9090/-/healthy'})
+    ok: [mlops-vm] => (item={'name': 'grafana', 'url': 'http://127.0.0.1:3000/api/health'})
+    ok: [mlops-vm] => (item={'name': 'node-exporter', 'url': 'http://127.0.0.1:9100/metrics'})
+    
+    TASK [Smoke test production-like inference through Feast Redis] ****************
+    ok: [mlops-vm]
+    
+    TASK [Check canary traffic distribution] ***************************************
+    ok: [mlops-vm]
+    
+    TASK [Show main running containers] ********************************************
+    ok: [mlops-vm]
+    
+    TASK [Show canary running containers] ******************************************
+    ok: [mlops-vm]
+    
+    TASK [Print main running containers] *******************************************
+    ok: [mlops-vm] => {
+        "compose_ps.stdout_lines": [
+            "NAME                                       IMAGE                           COMMAND                  SERVICE             CREATED              STATUS                             PORTS",
+            "predictive-maintenance-airflow-scheduler   infra-airflow-scheduler         \"/usr/bin/dumb-init …\"   airflow-scheduler   About a minute ago   Up About a minute                  8080/tcp",
+            "predictive-maintenance-airflow-webserver   infra-airflow-webserver         \"/usr/bin/dumb-init …\"   airflow-webserver   About a minute ago   Up About a minute (healthy)        0.0.0.0:8081->8080/tcp, [::]:8081->8080/tcp",
+            "predictive-maintenance-api                 infra-api                       \"uvicorn app.main:ap…\"   api                 About a minute ago   Up About a minute (healthy)        0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp",
+            "predictive-maintenance-api-canary          infra-canary                    \"uvicorn app.main:ap…\"   canary              About a minute ago   Up About a minute (healthy)        8000/tcp",
+            "predictive-maintenance-api-stable          infra-stable                    \"uvicorn app.main:ap…\"   stable              About a minute ago   Up About a minute (healthy)        8000/tcp",
+            "predictive-maintenance-canary-gateway      nginx:1.27-alpine               \"/docker-entrypoint.…\"   canary-gateway      About a minute ago   Up 48 seconds (health: starting)   0.0.0.0:8010->80/tcp, [::]:8010->80/tcp",
+            "predictive-maintenance-grafana             grafana/grafana:11.3.1          \"/run.sh\"                grafana             6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp",
+            "predictive-maintenance-mlflow              ghcr.io/mlflow/mlflow:v2.18.0   \"/bin/sh -c 'pip ins…\"   mlflow              14 minutes ago       Up 13 minutes (healthy)            0.0.0.0:5050->5000/tcp, [::]:5050->5000/tcp",
+            "predictive-maintenance-node-exporter       prom/node-exporter:v1.8.2       \"/bin/node_exporter\"     node-exporter       6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:9100->9100/tcp, [::]:9100->9100/tcp",
+            "predictive-maintenance-postgres            postgres:16                     \"docker-entrypoint.s…\"   postgres            14 minutes ago       Up 14 minutes (healthy)            0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp",
+            "predictive-maintenance-prometheus          prom/prometheus:v2.55.1         \"/bin/prometheus --c…\"   prometheus          6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:9090->9090/tcp, [::]:9090->9090/tcp",
+            "predictive-maintenance-redis               redis:7                         \"docker-entrypoint.s…\"   redis               14 minutes ago       Up 14 minutes (healthy)            0.0.0.0:16379->6379/tcp, [::]:16379->6379/tcp"
+        ]
+    }
+    
+    TASK [Print canary running containers] *****************************************
+    ok: [mlops-vm] => {
+        "canary_compose_ps.stdout_lines": [
+            "NAME                                       IMAGE                           COMMAND                  SERVICE             CREATED              STATUS                             PORTS",
+            "predictive-maintenance-airflow-scheduler   infra-airflow-scheduler         \"/usr/bin/dumb-init …\"   airflow-scheduler   About a minute ago   Up About a minute                  8080/tcp",
+            "predictive-maintenance-airflow-webserver   infra-airflow-webserver         \"/usr/bin/dumb-init …\"   airflow-webserver   About a minute ago   Up About a minute (healthy)        0.0.0.0:8081->8080/tcp, [::]:8081->8080/tcp",
+            "predictive-maintenance-api                 infra-api                       \"uvicorn app.main:ap…\"   api                 2 minutes ago        Up About a minute (healthy)        0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp",
+            "predictive-maintenance-api-canary          infra-canary                    \"uvicorn app.main:ap…\"   canary              About a minute ago   Up About a minute (healthy)        8000/tcp",
+            "predictive-maintenance-api-stable          infra-stable                    \"uvicorn app.main:ap…\"   stable              About a minute ago   Up About a minute (healthy)        8000/tcp",
+            "predictive-maintenance-canary-gateway      nginx:1.27-alpine               \"/docker-entrypoint.…\"   canary-gateway      About a minute ago   Up 50 seconds (health: starting)   0.0.0.0:8010->80/tcp, [::]:8010->80/tcp",
+            "predictive-maintenance-grafana             grafana/grafana:11.3.1          \"/run.sh\"                grafana             6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp",
+            "predictive-maintenance-mlflow              ghcr.io/mlflow/mlflow:v2.18.0   \"/bin/sh -c 'pip ins…\"   mlflow              14 minutes ago       Up 13 minutes (healthy)            0.0.0.0:5050->5000/tcp, [::]:5050->5000/tcp",
+            "predictive-maintenance-node-exporter       prom/node-exporter:v1.8.2       \"/bin/node_exporter\"     node-exporter       6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:9100->9100/tcp, [::]:9100->9100/tcp",
+            "predictive-maintenance-postgres            postgres:16                     \"docker-entrypoint.s…\"   postgres            14 minutes ago       Up 14 minutes (healthy)            0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp",
+            "predictive-maintenance-prometheus          prom/prometheus:v2.55.1         \"/bin/prometheus --c…\"   prometheus          6 minutes ago        Up 6 minutes (healthy)             0.0.0.0:9090->9090/tcp, [::]:9090->9090/tcp",
+            "predictive-maintenance-redis               redis:7                         \"docker-entrypoint.s…\"   redis               14 minutes ago       Up 14 minutes (healthy)            0.0.0.0:16379->6379/tcp, [::]:16379->6379/tcp"
+        ]
+    }
+    
+    TASK [Print production-like prediction response] *******************************
+    ok: [mlops-vm] => {
+        "feature_store_prediction.json": {
+            "failure_probability": 0.014700660952716337,
+            "model_alias": "champion",
+            "model_name": "predictive-maintenance-model",
+            "prediction": 0,
+            "recommended_action": "continue_normal_operation",
+            "risk_level": "low"
+        }
+    }
+    
+    TASK [Print canary distribution] ***********************************************
+    ok: [mlops-vm] => {
+        "canary_distribution.stdout_lines": [
+            "     50 {\"status\":\"ok\",\"model_loaded\":true,\"deployment_track\":\"stable\",\"model_alias\":\"champion\"}"
+        ]
+    }
+    
+    PLAY RECAP *********************************************************************
+    mlops-vm                   : ok=23   changed=7    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+    
+
+
+Ansible playbook успешно развернул MLOps-инфраструктуру на виртуальной машине.
+
+В конце выполнения получен статус:
+
+```text
+failed=0
+unreachable=0
+```
+Это означает, что развёртывание завершилось без ошибок. На VM подняты основные сервисы проекта: FastAPI, MLflow, Airflow, Prometheus, Grafana, Node Exporter, Redis, PostgreSQL, а также canary gateway.
+
+Также выполнен smoke-test production-like inference через Feast Redis. Ответ API содержит модель predictive-maintenance-model с alias champion, вероятность отказа, класс прогноза, уровень риска и рекомендуемое действие. 
+
+Cервис работает на VM и использует production-like путь получения признаков и инференса.
+
+
+Проверим публичные ссылки не по SSH
+
+
+```bash
+%%bash
+curl -s http://158.160.13.227:8000/health
+```
+
+    {"status":"ok","model_loaded":true,"deployment_track":"single","model_alias":"champion"}
+
+
+```bash
+%%bash
+curl -I http://158.160.13.227:8000/docs
+```
+
+      % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                     Dload  Upload   Total   Spent    Left  Speed
+      0   960    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+
+
+    HTTP/1.1 200 OK
+    date: Sun, 31 May 2026 09:33:50 GMT
+    server: uvicorn
+    content-length: 960
+    content-type: text/html; charset=utf-8
+    
+
+
+Осуществим прод инференс снаружи VM
+
+
+```bash
+%%bash
+curl -s -X POST http://158.160.13.227:8000/predict/from-feature-store \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id": 1}'
+```
+
+    {"failure_probability":0.014700660952716337,"prediction":0,"risk_level":"low","recommended_action":"continue_normal_operation","model_name":"predictive-maintenance-model","model_alias":"champion"}
+
+Публичные UI-ссылки 
+
+- http://158.160.13.227:8000/docs
+- http://158.160.13.227:5050
+- http://158.160.13.227:8081
+- http://158.160.13.227:9090
+- http://158.160.13.227:3000
+
+
+```bash
+%%bash
+cd "$PROJECT_ROOT"
+
+ansible -i ansible/inventory.ini mlops -m shell -a '
+cd /opt/predictive-maintenance-mlops
+
+echo "=== docker ps ==="
+docker compose -f infra/docker-compose.yml ps
+
+echo
+echo "=== local health checks inside VM ==="
+curl -s -o /dev/null -w "fastapi: %{http_code}\n" http://127.0.0.1:8000/health
+curl -s -o /dev/null -w "airflow: %{http_code}\n" http://127.0.0.1:8081/health
+curl -s -o /dev/null -w "mlflow: %{http_code}\n" http://127.0.0.1:5050
+curl -s -o /dev/null -w "prometheus: %{http_code}\n" http://127.0.0.1:9090/-/healthy
+curl -s -o /dev/null -w "grafana: %{http_code}\n" http://127.0.0.1:3000/api/health
+'
+```
+
+    [ERROR]: Task failed: Failed to connect to the host via ssh: Connection timed out during banner exchange
+    Connection to 158.160.13.227 port 22 timed out
+    Origin: <adhoc 'shell' task>
+    
+    {'action': 'shell', 'args': {'_raw_params': '\ncd /opt/predictive-maintenance-mlops\n\necho "=== docker ps [...]
+    
+    mlops-vm | UNREACHABLE! => {
+        "changed": false,
+        "msg": "Task failed: Failed to connect to the host via ssh: Connection timed out during banner exchange\r\nConnection to 158.160.13.227 port 22 timed out",
+        "unreachable": true
+    }
+
+
+
+    ---------------------------------------------------------------------------
+
+    CalledProcessError                        Traceback (most recent call last)
+
+    Cell In[74], line 1
+    ----> 1 get_ipython().run_cell_magic('bash', '', 'cd "$PROJECT_ROOT"\n\nansible -i ansible/inventory.ini mlops -m shell -a \'\ncd /opt/predictive-maintenance-mlops\n\necho "=== docker ps ==="\ndocker compose -f infra/docker-compose.yml ps\n\necho\necho "=== local health checks inside VM ==="\ncurl -s -o /dev/null -w "fastapi: %{http_code}\\n" http://127.0.0.1:8000/health\ncurl -s -o /dev/null -w "airflow: %{http_code}\\n" http://127.0.0.1:8081/health\ncurl -s -o /dev/null -w "mlflow: %{http_code}\\n" http://127.0.0.1:5050\ncurl -s -o /dev/null -w "prometheus: %{http_code}\\n" http://127.0.0.1:9090/-/healthy\ncurl -s -o /dev/null -w "grafana: %{http_code}\\n" http://127.0.0.1:3000/api/health\n\'\n')
+
+
+    CalledProcessError: Command 'b'cd "$PROJECT_ROOT"\n\nansible -i ansible/inventory.ini mlops -m shell -a \'\ncd /opt/predictive-maintenance-mlops\n\necho "=== docker ps ==="\ndocker compose -f infra/docker-compose.yml ps\n\necho\necho "=== local health checks inside VM ==="\ncurl -s -o /dev/null -w "fastapi: %{http_code}\\n" http://127.0.0.1:8000/health\ncurl -s -o /dev/null -w "airflow: %{http_code}\\n" http://127.0.0.1:8081/health\ncurl -s -o /dev/null -w "mlflow: %{http_code}\\n" http://127.0.0.1:5050\ncurl -s -o /dev/null -w "prometheus: %{http_code}\\n" http://127.0.0.1:9090/-/healthy\ncurl -s -o /dev/null -w "grafana: %{http_code}\\n" http://127.0.0.1:3000/api/health\n\'\n'' returned non-zero exit status 4.
+
+
 # Дадим нагрузку на инференс
 
 

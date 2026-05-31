@@ -973,23 +973,7 @@ models/           Локальные артефакты моделей
 reports/          Evidently-отчёты и финальный GitHub-readable service report
 ```
 
-## 20. Рекомендуемые скриншоты для отчёта
-
-1. GitHub Actions CI success.
-2. Ansible ping, syntax-check и successful playbook recap `failed=0`.
-3. `docker compose ps` со всеми сервисами `Up` / `healthy`.
-4. FastAPI `/docs` или успешный `/predict/from-feature-store`.
-5. MLflow UI с экспериментами и registered champion model.
-6. Airflow UI с DAG `predictive_maintenance_training_pipeline`.
-7. Feast offline и online retrieval checks.
-8. Canary gateway: распределение 90/10, 50/50, 100% canary и rollback.
-9. Prometheus targets: `api`, `node-exporter`, `prometheus` в состоянии `up`.
-10. Prometheus rules с `PredictiveMaintenanceFeatureRetrievalErrors`.
-11. Grafana dashboard `Predictive Maintenance API`, включая CPU usage через Node Exporter.
-12. Evidently HTML report `reports/evidently/data_drift_report.html`.
-13. Публичные cloud endpoints на VM.
-
-## 21. Финальный отчёт
+## 20. Финальный отчёт
 
 GitHub-readable версия отчёта находится в:
 
